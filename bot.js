@@ -1,203 +1,193 @@
+const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const moment = require('moment-jalaali');
+const redis = require('redis');
 
-// Replace with your bot's token
-const token = '1355028807:FpSzen2exQIhLI47fQtyQVDZjO5Xr99P4ELXCc42';
-const apiUrl = `https://tapi.bale.ai/bot${token}/`;
+moment.loadPersian({ usePersianDigits: true });
 
-// Special users to receive the feedback
-const specialUsers = [844843541];
+const botToken = '1160037511:EQNWiWm1RMmMbCydsXiwOsEdyPbmomAuwu4tX6Xb';
+const bot = new TelegramBot(botToken, { polling: true });
 
-// Store feedbacks to prevent multiple feedbacks per user per day
-const feedbacks = {};
+const redisClient = redis.createClient();
+redisClient.connect();
 
-// Helper to get Persian numerals
-function toPersianNumerals(number) {
-  const persianNumerals = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-  return number.toString().split('').map(digit => persianNumerals[parseInt(digit)]).join('');
+const WHITELISTED_USERS = [844843541, 1085839779]; // Replace with actual user IDs
+const GROUP_ID = 5272323810; // Replace with your group ID
+
+let autoMessageEnabled = false;
+let autoMessageText = '🔔 پیام خودکار برای کاربران غیرگروهی!';
+
+// Persian date function
+function getPersianDate() {
+  return moment().format('jYYYY/jMM/jDD HH:mm');
 }
 
-// Format the date in Persian using Jalaali
-function formatDate() {
-  return moment().format('jYYYY/jMM/jDD ساعت HH:mm');
+// Custom UID generator
+function generateUID() {
+  return Math.random().toString(36).substr(2, 10);
 }
 
-// Send a message using axios
-function sendMessage(chatId, text, replyMarkup = {}) {
-  return axios.post(`${apiUrl}sendMessage`, {
-    chat_id: chatId,
-    text: text,
-    reply_markup: replyMarkup
-  }).catch(error => {
-    console.error('Error sending message:', error.response ? error.response.data : error.message);
-  });
-}
+// Greet users
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+  const firstName = msg.from.first_name || 'کاربر';
+  const persianDate = getPersianDate();
+  
+  const response = `👋 سلام ${firstName}!\n📅 تاریخ: ${persianDate}`;
+  bot.sendMessage(chatId, response);
+});
 
-// Edit a message using axios
-function editMessage(chatId, messageId, text, replyMarkup = {}) {
-  return axios.post(`${apiUrl}editMessageText`, {
-    chat_id: chatId,
-    message_id: messageId,
-    text: text,
-    reply_markup: replyMarkup
-  }).catch(error => {
-    console.error('Error editing message:', error.response ? error.response.data : error.message);
-  });
-}
-
-// Store pending feedback requests
-const pendingFeedbacks = new Set();
-
-// Send a feedback to the special users
-function sendFeedbackToSpecialUsers(feedback, username, firstName, userId) {
-  const feedbackMessage = `
-    📝 بازخورد جدید:
-    👤 کاربر: ${username ? '@' + username : 'ناشناس'}
-    🏷 نام: ${firstName}
-    🆔 شناسه: ${userId}
-    🗨️ بازخورد: ${feedback}
-  `;
-
-  specialUsers.forEach(specialUserId => {
-    sendMessage(specialUserId, feedbackMessage, {
+// Panel access for whitelisted users
+bot.onText(/پنل/, async (msg) => {
+  const chatId = msg.chat.id;
+  if (!WHITELISTED_USERS.includes(chatId.toString())) return;
+  
+  bot.sendMessage(chatId, '⚙️ منو مدیریت:', {
+    reply_markup: {
       inline_keyboard: [
-        [
-          { text: '📤 فوروارد بازخورد', callback_data: `forward_feedback_${userId}_${encodeURIComponent(feedback)}` }
+        [{ text: '📩 پیام‌رسانی', callback_data: 'messaging' }],
+        [{ text: '📂 ارسال فایل', callback_data: 'upload_file' }]
+      ]
+    }
+  });
+});
+
+// Messaging menu
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data === 'messaging') {
+    bot.editMessageText('📩 گزینه‌های پیام‌رسانی:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📢 ارسال به همه', callback_data: 'send_all' }],
+          [{ text: '👥 ارسال به گروه', callback_data: 'send_group' }],
+          [{ text: '🚫 ارسال به غیرگروه', callback_data: 'send_non_group' }],
+          [{ text: autoMessageEnabled ? '❌ غیرفعال‌سازی پیام خودکار' : '✅ فعال‌سازی پیام خودکار', callback_data: 'toggle_auto' }]
         ]
-      ]
+      }
     });
-  });
-}
-
-// Process the feedback submission
-function processFeedback(msg, feedback) {
-  const chatId = msg.chat.id;
-  const username = msg.from.username;
-  const firstName = msg.from.first_name;
-  const userId = msg.from.id;
-
-  // Check if the user has already given feedback today
-  const today = moment().format('jYYYY/jMM/jDD');
-  if (feedbacks[userId] && feedbacks[userId].date === today) {
-    sendMessage(chatId, '❗ شما قبلاً امروز بازخورد داده‌اید.');
-    return;
+  } else if (data === 'toggle_auto') {
+    autoMessageEnabled = !autoMessageEnabled;
+    bot.answerCallbackQuery(query.id, { text: autoMessageEnabled ? '✅ فعال شد' : '❌ غیرفعال شد' });
   }
+});
 
-  // Remove from pending feedbacks if exists
-  pendingFeedbacks.delete(userId);
-
-  // Save feedback for the user
-  feedbacks[userId] = { feedback, date: today };
-
-  // Send the feedback to special users
-  sendFeedbackToSpecialUsers(feedback, username, firstName, userId);
-
-  sendMessage(chatId, '✅ بازخورد شما ارسال شد. از شما متشکریم!');
-}
-
-// Start Command
-function handleStart(msg) {
-  const chatId = msg.chat.id;
-
-  const greetingMessage = `
-  سلام ${msg.from.first_name} عزیز! 👋
-  
-  🕒 زمان کنونی: ${toPersianNumerals(moment().format('jHH:mm'))} - ${toPersianNumerals(moment().format('jDD/jMM/jYYYY'))}
-  
-  لطفاً رباتی که می‌خواهید بازخورد دهید را انتخاب کنید. 🤖
-  `;
-
-  const options = {
-    inline_keyboard: [
-      [{ text: '🔽 ربات آپلود | uploadd_bot', callback_data: 'uploader_info' }]
-    ]
-  };
-
-  sendMessage(chatId, greetingMessage, options);
-}
-
-// Handle incoming messages
-function handleMessage(msg) {
-  const chatId = msg.chat.id;
-  const text = msg.text || '';
-
-  // Start command (explicit check to ensure it works)
-  if (text.trim() === '/start') {
-    handleStart(msg);
-    return;
+// Sending messages
+bot.onText(/\/sendall (.+)/, async (msg, match) => {
+  const text = match[1];
+  const keys = await redisClient.keys('user:*');
+  for (let key of keys) {
+    const userId = key.split(':')[1];
+    bot.sendMessage(userId, `📢 پیام جدید:\n\n${text}`);
   }
+  bot.sendMessage(msg.chat.id, '✅ پیام به همه ارسال شد.');
+});
 
-  // Feedback submission logic
-  if (pendingFeedbacks.has(msg.from.id)) {
-    processFeedback(msg, text);
-    return;
+bot.onText(/\/sendgroup (.+)/, async (msg, match) => {
+  const text = match[1];
+  bot.sendMessage(GROUP_ID, `👥 پیام برای گروه:\n\n${text}`);
+  bot.sendMessage(msg.chat.id, '✅ پیام به گروه ارسال شد.');
+});
+
+bot.onText(/\/sendnongroup (.+)/, async (msg, match) => {
+  const text = match[1];
+  const keys = await redisClient.keys('user:*');
+  for (let key of keys) {
+    const userId = key.split(':')[1];
+    if (userId !== GROUP_ID) {
+      bot.sendMessage(userId, `🚫 پیام برای غیرگروهی‌ها:\n\n${text}`);
+    }
   }
+  bot.sendMessage(msg.chat.id, '✅ پیام به کاربران غیرگروهی ارسال شد.');
+});
 
-  if (text.startsWith('ارسال بازخورد')) {
-    sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
-    return;
+// Auto-message feature
+setInterval(async () => {
+  if (autoMessageEnabled) {
+    const keys = await redisClient.keys('user:*');
+    for (let key of keys) {
+      const userId = key.split(':')[1];
+      if (userId !== GROUP_ID) {
+        bot.sendMessage(userId, autoMessageText);
+      }
+    }
   }
-}
+}, 7200000); // 2 hours in milliseconds
 
-// Handle callback queries (buttons pressed)
-function handleCallbackQuery(callbackQuery) {
-  const chatId = callbackQuery.message.chat.id;
-  const messageId = callbackQuery.message.message_id;
-  const data = callbackQuery.data;
+// File upload system
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
 
-  if (data === 'uploader_info') {
-    const botInfo = `
-    🔹 نام: •آ‌پــلــودر | 𝙪𝙥𝙡𝙤𝙖𝙙𝙚𝙧•
-    🔹 شناسه: @uploadd_bot
-    🔹 هدف: آپلود و مدیریت فایل به شیوه‌ای آسان و مدرن! 📂🚀
-    `;
-
-    const options = {
-      inline_keyboard: [
-        [{ text: '📝 ارسال بازخورد', callback_data: 'send_feedback' }],
-        [{ text: '🔙 بازگشت', callback_data: 'back_to_start' }]
-      ]
-    };
-
-    editMessage(chatId, messageId, botInfo, options);
-  }
-
-  if (data === 'send_feedback') {
-    sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
-    pendingFeedbacks.add(callbackQuery.from.id);
-  }
-
-  if (data.startsWith('forward_feedback_')) {
-    const [, userId, encodedFeedback] = data.split('_');
-    const feedback = decodeURIComponent(encodedFeedback);
-    
-    // Forward logic can be implemented here if needed
-    sendMessage(chatId, `بازخورد با موفقیت فوروارد شد:\n${feedback}`);
-  }
-
-  if (data === 'back_to_start') {
-    handleStart(callbackQuery.message);
-  }
-}
-
-// Poll for new messages
-function pollMessages() {
-  axios.post(`${apiUrl}getUpdates`)
-    .then(response => {
-      const updates = response.data.result;
-      updates.forEach(update => {
-        if (update.message) {
-          handleMessage(update.message);
-        }
-        if (update.callback_query) {
-          handleCallbackQuery(update.callback_query);
-        }
-      });
-    })
-    .catch(error => {
-      console.error('Error getting updates:', error);
+  if (data === 'upload_file') {
+    bot.sendMessage(chatId, '❓ آیا فایل رمز عبور دارد؟', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔐 بله', callback_data: 'file_with_pass' }],
+          [{ text: '📁 خیر', callback_data: 'file_no_pass' }]
+        ]
+      }
     });
-}
+  }
+});
 
-// Start polling
-setInterval(pollMessages, 1000); // Poll every second
+let fileUploadState = {};
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data === 'file_with_pass') {
+    fileUploadState[chatId] = { requiresPassword: true };
+    bot.sendMessage(chatId, '🔑 لطفاً رمز عبور را ارسال کنید.');
+  } else if (data === 'file_no_pass') {
+    fileUploadState[chatId] = { requiresPassword: false };
+    bot.sendMessage(chatId, '📎 لطفاً فایل را ارسال کنید.');
+  }
+});
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (fileUploadState[chatId]) {
+    if (fileUploadState[chatId].requiresPassword && msg.text) {
+      fileUploadState[chatId].password = msg.text;
+      bot.sendMessage(chatId, '✅ رمز عبور ذخیره شد. حالا فایل را ارسال کنید.');
+    } else if (msg.document) {
+      const fileId = msg.document.file_id;
+      const fileUID = generateUID();
+      await redisClient.set(fileUID, JSON.stringify({ fileId, password: fileUploadState[chatId].password || null }));
+
+      delete fileUploadState[chatId];
+
+      bot.sendMessage(chatId, `📂 فایل ذخیره شد!\n🔗 لینک دریافت فایل:\n\`\`\`/start ${fileUID}\`\`\``);
+    }
+  }
+});
+
+// Fetch file when start link is used
+bot.onText(/\/start (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const fileUID = match[1];
+
+  const fileData = await redisClient.get(fileUID);
+  if (!fileData) return bot.sendMessage(chatId, '❌ فایل مورد نظر یافت نشد.');
+
+  const { fileId, password } = JSON.parse(fileData);
+  if (password) {
+    bot.sendMessage(chatId, '🔐 لطفاً رمز عبور را ارسال کنید.');
+    bot.once('message', async (msg) => {
+      if (msg.text === password) {
+        bot.sendDocument(chatId, fileId);
+      } else {
+        bot.sendMessage(chatId, '❌ رمز اشتباه است.');
+      }
+    });
+  } else {
+    bot.sendDocument(chatId, fileId);
+  }
+});
