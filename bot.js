@@ -3,7 +3,7 @@ const moment = require('moment-jalaali');
 
 // Replace with your bot's token
 const token = '1355028807:FpSzen2exQIhLI47fQtyQVDZjO5Xr99P4ELXCc42';
-const apiUrl = `https://api.telegram.org/bot${token}/`;
+const apiUrl = `https://tapi.bale.ai/bot${token}/`;
 
 // Special users to receive the feedback
 const specialUsers = [844843541, 1];
