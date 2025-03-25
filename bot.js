@@ -152,7 +152,11 @@ const messageHandlers = {
     }
 
     // Process actual feedback
-    if (text && text.trim().length > 0) {
+    // Ignore commands and very short or system-like messages
+    if (text && 
+        text.trim().length > 0 && 
+        !text.startsWith('/') && 
+        !['ارسال بازخورد', '/start'].includes(text.trim())) {
       await this.processFeedback(msg, text);
     }
   },
