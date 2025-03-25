@@ -119,10 +119,10 @@ function handleStart(msg) {
 // Handle incoming messages
 function handleMessage(msg) {
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const text = msg.text || '';
 
-  // Start command
-  if (text === '/start') {
+  // Start command (explicit check to ensure it works)
+  if (text.trim() === '/start') {
     handleStart(msg);
     return;
   }
@@ -133,7 +133,7 @@ function handleMessage(msg) {
     return;
   }
 
-  if (text && text.startsWith('ارسال بازخورد')) {
+  if (text.startsWith('ارسال بازخورد')) {
     sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
     return;
   }
