@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 // Replace with your actual bot token
-const BOT_TOKEN = '1355028807:TcPZyWc3GHRjCuJjAzLDR8SnJVrnmRVltA3FpFtY';
+const BOT_TOKEN = '2067752990:gboC2fk9euxXvO4nVp7hVUBhDLkG2wnKnePOiSVO';
 const TELEGRAM_API = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
 let lastUpdateId = 0;
 
