@@ -6,7 +6,7 @@ const token = '1355028807:FpSzen2exQIhLI47fQtyQVDZjO5Xr99P4ELXCc42';
 const apiUrl = `https://tapi.bale.ai/bot${token}/`;
 
 // Special users to receive the feedback
-const specialUsers = [844843541, 1];
+const specialUsers = [844843541];
 
 // Store feedbacks to prevent multiple feedbacks per user per day
 const feedbacks = {};
