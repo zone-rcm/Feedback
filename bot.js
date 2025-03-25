@@ -1,193 +1,111 @@
-const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const moment = require('moment-jalaali');
-const redis = require('redis');
-#
-moment.loadPersian({ usePersianDigits: true });
 
-const botToken = '1160037511:EQNWiWm1RMmMbCydsXiwOsEdyPbmomAuwu4tX6Xb';
-const bot = new TelegramBot(botToken, { polling: true });
+// Configuration
+const BOT_TOKEN = '1160037511:1K8GGcq7N14gngAo6e9apfT2yVYPCSI9xmRsHVCe';
+const GROUP_ID = 5272323810; // The group ID you want to check
+const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
+let lastUpdateId = 0; // To keep track of processed updates
 
-const redisClient = redis.createClient();
-redisClient.connect();
-
-const WHITELISTED_USERS = [844843541, 1085839779]; // Replace with actual user IDs
-const GROUP_ID = 5272323810; // Replace with your group ID
-
-let autoMessageEnabled = false;
-let autoMessageText = '🔔 پیام خودکار برای کاربران غیرگروهی!';
-
-// Persian date function
-function getPersianDate() {
-  return moment().format('jYYYY/jMM/jDD HH:mm');
-}
-
-// Custom UID generator
-function generateUID() {
-  return Math.random().toString(36).substr(2, 10);
-}
-
-// Greet users
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-  const firstName = msg.from.first_name || 'کاربر';
-  const persianDate = getPersianDate();
-  
-  const response = `👋 سلام ${firstName}!\n📅 تاریخ: ${persianDate}`;
-  bot.sendMessage(chatId, response);
-});
-
-// Panel access for whitelisted users
-bot.onText(/پنل/, async (msg) => {
-  const chatId = msg.chat.id;
-  if (!WHITELISTED_USERS.includes(chatId.toString())) return;
-  
-  bot.sendMessage(chatId, '⚙️ منو مدیریت:', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📩 پیام‌رسانی', callback_data: 'messaging' }],
-        [{ text: '📂 ارسال فایل', callback_data: 'upload_file' }]
-      ]
-    }
-  });
-});
-
-// Messaging menu
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  if (data === 'messaging') {
-    bot.editMessageText('📩 گزینه‌های پیام‌رسانی:', {
+// Function to handle /start command
+async function handleStartCommand(chatId, userId) {
+  try {
+    // Check if user is a member of the group
+    const response = await axios.get(`${API_URL}/getChatMember`, {
+      params: {
+        chat_id: GROUP_ID,
+        user_id: userId
+      }
+    });
+    
+    const status = response.data.result.status;
+    const isMember = ['member', 'administrator', 'creator'].includes(status);
+    
+    // Send appropriate message
+    await axios.post(`${API_URL}/sendMessage`, {
       chat_id: chatId,
-      message_id: query.message.message_id,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '📢 ارسال به همه', callback_data: 'send_all' }],
-          [{ text: '👥 ارسال به گروه', callback_data: 'send_group' }],
-          [{ text: '🚫 ارسال به غیرگروه', callback_data: 'send_non_group' }],
-          [{ text: autoMessageEnabled ? '❌ غیرفعال‌سازی پیام خودکار' : '✅ فعال‌سازی پیام خودکار', callback_data: 'toggle_auto' }]
-        ]
-      }
+      text: isMember 
+        ? "You're a member of the group! ✅" 
+        : "You're not in the group or have left. ❌"
     });
-  } else if (data === 'toggle_auto') {
-    autoMessageEnabled = !autoMessageEnabled;
-    bot.answerCallbackQuery(query.id, { text: autoMessageEnabled ? '✅ فعال شد' : '❌ غیرفعال شد' });
-  }
-});
-
-// Sending messages
-bot.onText(/\/sendall (.+)/, async (msg, match) => {
-  const text = match[1];
-  const keys = await redisClient.keys('user:*');
-  for (let key of keys) {
-    const userId = key.split(':')[1];
-    bot.sendMessage(userId, `📢 پیام جدید:\n\n${text}`);
-  }
-  bot.sendMessage(msg.chat.id, '✅ پیام به همه ارسال شد.');
-});
-
-bot.onText(/\/sendgroup (.+)/, async (msg, match) => {
-  const text = match[1];
-  bot.sendMessage(GROUP_ID, `👥 پیام برای گروه:\n\n${text}`);
-  bot.sendMessage(msg.chat.id, '✅ پیام به گروه ارسال شد.');
-});
-
-bot.onText(/\/sendnongroup (.+)/, async (msg, match) => {
-  const text = match[1];
-  const keys = await redisClient.keys('user:*');
-  for (let key of keys) {
-    const userId = key.split(':')[1];
-    if (userId !== GROUP_ID) {
-      bot.sendMessage(userId, `🚫 پیام برای غیرگروهی‌ها:\n\n${text}`);
-    }
-  }
-  bot.sendMessage(msg.chat.id, '✅ پیام به کاربران غیرگروهی ارسال شد.');
-});
-
-// Auto-message feature
-setInterval(async () => {
-  if (autoMessageEnabled) {
-    const keys = await redisClient.keys('user:*');
-    for (let key of keys) {
-      const userId = key.split(':')[1];
-      if (userId !== GROUP_ID) {
-        bot.sendMessage(userId, autoMessageText);
-      }
-    }
-  }
-}, 7200000); // 2 hours in milliseconds
-
-// File upload system
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  if (data === 'upload_file') {
-    bot.sendMessage(chatId, '❓ آیا فایل رمز عبور دارد؟', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🔐 بله', callback_data: 'file_with_pass' }],
-          [{ text: '📁 خیر', callback_data: 'file_no_pass' }]
-        ]
-      }
+    
+  } catch (error) {
+    console.error('Error handling /start command:', error.response?.data || error.message);
+    
+    // Send error message if user is not in group or bot can't check
+    await axios.post(`${API_URL}/sendMessage`, {
+      chat_id: chatId,
+      text: "I couldn't verify your group status. Please ensure:\n" +
+            "1. The bot is added to the group\n" +
+            "2. The bot has necessary permissions\n" +
+            "3. You're in the correct group"
     });
   }
-});
+}
 
-let fileUploadState = {};
-
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  if (data === 'file_with_pass') {
-    fileUploadState[chatId] = { requiresPassword: true };
-    bot.sendMessage(chatId, '🔑 لطفاً رمز عبور را ارسال کنید.');
-  } else if (data === 'file_no_pass') {
-    fileUploadState[chatId] = { requiresPassword: false };
-    bot.sendMessage(chatId, '📎 لطفاً فایل را ارسال کنید.');
-  }
-});
-
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-
-  if (fileUploadState[chatId]) {
-    if (fileUploadState[chatId].requiresPassword && msg.text) {
-      fileUploadState[chatId].password = msg.text;
-      bot.sendMessage(chatId, '✅ رمز عبور ذخیره شد. حالا فایل را ارسال کنید.');
-    } else if (msg.document) {
-      const fileId = msg.document.file_id;
-      const fileUID = generateUID();
-      await redisClient.set(fileUID, JSON.stringify({ fileId, password: fileUploadState[chatId].password || null }));
-
-      delete fileUploadState[chatId];
-
-      bot.sendMessage(chatId, `📂 فایل ذخیره شد!\n🔗 لینک دریافت فایل:\n\`\`\`/start ${fileUID}\`\`\``);
+// Function to process updates
+async function processUpdates(updates) {
+  for (const update of updates) {
+    // Skip already processed updates
+    if (update.update_id <= lastUpdateId) continue;
+    
+    lastUpdateId = update.update_id;
+    
+    // Check if the update contains a message with /start command
+    if (update.message && update.message.text === '/start') {
+      const chatId = update.message.chat.id;
+      const userId = update.message.from.id;
+      
+      await handleStartCommand(chatId, userId);
     }
   }
-});
+}
 
-// Fetch file when start link is used
-bot.onText(/\/start (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const fileUID = match[1];
-
-  const fileData = await redisClient.get(fileUID);
-  if (!fileData) return bot.sendMessage(chatId, '❌ فایل مورد نظر یافت نشد.');
-
-  const { fileId, password } = JSON.parse(fileData);
-  if (password) {
-    bot.sendMessage(chatId, '🔐 لطفاً رمز عبور را ارسال کنید.');
-    bot.once('message', async (msg) => {
-      if (msg.text === password) {
-        bot.sendDocument(chatId, fileId);
-      } else {
-        bot.sendMessage(chatId, '❌ رمز اشتباه است.');
+// Long polling function with improved error handling
+async function longPoll() {
+  try {
+    const response = await axios.get(`${API_URL}/getUpdates`, {
+      params: {
+        offset: lastUpdateId + 1,
+        timeout: 30 // Wait up to 30 seconds for new updates
       }
     });
-  } else {
-    bot.sendDocument(chatId, fileId);
+    
+    if (response.data.result && response.data.result.length > 0) {
+      await processUpdates(response.data.result);
+    }
+  } catch (error) {
+    console.error('Error in long polling:', error.message);
+    
+    // More robust error handling
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      console.error('Error details:', error.response.data);
+      console.error('Error status:', error.response.status);
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('No response received');
+    } else {
+      // Something happened in setting up the request
+      console.error('Error setting up request', error.message);
+    }
+    
+    // Wait before retrying in case of error
+    await new Promise(resolve => setTimeout(resolve, 5000));
   }
+  
+  // Continue polling
+  setImmediate(longPoll);
+}
+
+// Start the bot
+console.log('Bot is running...');
+longPoll().catch(err => {
+  console.error('Bot failed to start:', err);
+  process.exit(1); // Exit with error code if bot fails to start
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('Stopping bot...');
+  process.exit(0);
 });
