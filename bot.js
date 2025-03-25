@@ -1,263 +1,203 @@
 const axios = require('axios');
 const moment = require('moment-jalaali');
 
-// IMPORTANT: REPLACE THIS WITH YOUR ACTUAL BOT TOKEN - KEEP IT SECRET!
-const BOT_TOKEN = '1355028807:FpSzen2exQIhLI47fQtyQVDZjO5Xr99P4ELXCc42';
+// Replace with your bot's token
+const token = '1355028807:FpSzen2exQIhLI47fQtyQVDZjO5Xr99P4ELXCc42';
+const apiUrl = `https://tapi.bale.ai/bot${token}/`;
 
-// Bot configuration
-const config = {
-  apiBaseUrl: 'https://tapi.bale.ai/bot' + BOT_TOKEN + '/',
-  specialUsers: [844843541],
-  maxFeedbackPerDay: 1,
-  updateOffset: 0
-};
+// Special users to receive the feedback
+const specialUsers = [844843541];
 
-// Simple logging utility
-const logger = {
-  info: (message) => console.log(`[INFO] ${message}`),
-  error: (message, error) => console.error(`[ERROR] ${message}`, error)
-};
+// Store feedbacks to prevent multiple feedbacks per user per day
+const feedbacks = {};
 
-// Persian utilities
-const persianUtils = {
-  toPersianNumerals(number) {
-    const persianNumerals = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-    return number.toString().split('').map(digit => persianNumerals[parseInt(digit)]).join('');
+// Helper to get Persian numerals
+function toPersianNumerals(number) {
+  const persianNumerals = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  return number.toString().split('').map(digit => persianNumerals[parseInt(digit)]).join('');
+}
+
+// Format the date in Persian using Jalaali
+function formatDate() {
+  return moment().format('jYYYY/jMM/jDD ساعت HH:mm');
+}
+
+// Send a message using axios
+function sendMessage(chatId, text, replyMarkup = {}) {
+  return axios.post(`${apiUrl}sendMessage`, {
+    chat_id: chatId,
+    text: text,
+    reply_markup: replyMarkup
+  }).catch(error => {
+    console.error('Error sending message:', error.response ? error.response.data : error.message);
+  });
+}
+
+// Edit a message using axios
+function editMessage(chatId, messageId, text, replyMarkup = {}) {
+  return axios.post(`${apiUrl}editMessageText`, {
+    chat_id: chatId,
+    message_id: messageId,
+    text: text,
+    reply_markup: replyMarkup
+  }).catch(error => {
+    console.error('Error editing message:', error.response ? error.response.data : error.message);
+  });
+}
+
+// Store pending feedback requests
+const pendingFeedbacks = new Set();
+
+// Send a feedback to the special users
+function sendFeedbackToSpecialUsers(feedback, username, firstName, userId) {
+  const feedbackMessage = `
+    📝 بازخورد جدید:
+    👤 کاربر: ${username ? '@' + username : 'ناشناس'}
+    🏷 نام: ${firstName}
+    🆔 شناسه: ${userId}
+    🗨️ بازخورد: ${feedback}
+  `;
+
+  specialUsers.forEach(specialUserId => {
+    sendMessage(specialUserId, feedbackMessage, {
+      inline_keyboard: [
+        [
+          { text: '📤 فوروارد بازخورد', callback_data: `forward_feedback_${userId}_${encodeURIComponent(feedback)}` }
+        ]
+      ]
+    });
+  });
+}
+
+// Process the feedback submission
+function processFeedback(msg, feedback) {
+  const chatId = msg.chat.id;
+  const username = msg.from.username;
+  const firstName = msg.from.first_name;
+  const userId = msg.from.id;
+
+  // Check if the user has already given feedback today
+  const today = moment().format('jYYYY/jMM/jDD');
+  if (feedbacks[userId] && feedbacks[userId].date === today) {
+    sendMessage(chatId, '❗ شما قبلاً امروز بازخورد داده‌اید.');
+    return;
   }
-};
 
-// Feedback management
-const feedbackManager = {
-  feedbacks: {},
+  // Remove from pending feedbacks if exists
+  pendingFeedbacks.delete(userId);
 
-  canSubmitFeedback(userId) {
-    const today = moment().format('jYYYY/jMM/jDD');
-    const userFeedback = this.feedbacks[userId];
-    
-    return !(userFeedback && userFeedback.date === today);
-  },
+  // Save feedback for the user
+  feedbacks[userId] = { feedback, date: today };
 
-  storeFeedback(userId, feedback) {
-    const today = moment().format('jYYYY/jMM/jDD');
-    this.feedbacks[userId] = { feedback, date: today };
+  // Send the feedback to special users
+  sendFeedbackToSpecialUsers(feedback, username, firstName, userId);
+
+  sendMessage(chatId, '✅ بازخورد شما ارسال شد. از شما متشکریم!');
+}
+
+// Start Command
+function handleStart(msg) {
+  const chatId = msg.chat.id;
+
+  const greetingMessage = `
+  سلام ${msg.from.first_name} عزیز! 👋
+  
+  🕒 زمان کنونی: ${toPersianNumerals(moment().format('jHH:mm'))} - ${toPersianNumerals(moment().format('jDD/jMM/jYYYY'))}
+  
+  لطفاً رباتی که می‌خواهید بازخورد دهید را انتخاب کنید. 🤖
+  `;
+
+  const options = {
+    inline_keyboard: [
+      [{ text: '🔽 ربات آپلود | uploadd_bot', callback_data: 'uploader_info' }]
+    ]
+  };
+
+  sendMessage(chatId, greetingMessage, options);
+}
+
+// Handle incoming messages
+function handleMessage(msg) {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  // Start command
+  if (text === '/start') {
+    handleStart(msg);
+    return;
   }
-};
 
-// Telegram API helpers
-const telegramApi = {
-  async sendMessage(chatId, text, replyMarkup = null) {
-    try {
-      const payload = {
-        chat_id: chatId,
-        text: text
-      };
-
-      if (replyMarkup) {
-        payload.reply_markup = replyMarkup;
-      }
-
-      await axios.post(`${config.apiBaseUrl}sendMessage`, payload);
-    } catch (error) {
-      logger.error('Failed to send message', error.response ? error.response.data : error.message);
-    }
-  },
-
-  async editMessage(chatId, messageId, text, replyMarkup = null) {
-    try {
-      const payload = {
-        chat_id: chatId,
-        message_id: messageId,
-        text: text
-      };
-
-      if (replyMarkup) {
-        payload.reply_markup = replyMarkup;
-      }
-
-      await axios.post(`${config.apiBaseUrl}editMessageText`, payload);
-    } catch (error) {
-      logger.error('Failed to edit message', error.response ? error.response.data : error.message);
-    }
+  // Feedback submission logic
+  if (pendingFeedbacks.has(msg.from.id)) {
+    processFeedback(msg, text);
+    return;
   }
-};
 
-// Message handlers
-const messageHandlers = {
-  async handleStart(msg) {
-    const chatId = msg.chat.id;
-    const firstName = msg.from.first_name || 'کاربر';
+  if (text && text.startsWith('ارسال بازخورد')) {
+    sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
+    return;
+  }
+}
 
-    const greetingMessage = `
-    سلام ${firstName} عزیز! 👋
-    
-    🕒 زمان کنونی: ${persianUtils.toPersianNumerals(moment().format('jHH:mm'))} - ${persianUtils.toPersianNumerals(moment().format('jDD/jMM/jYYYY'))}
-    
-    لطفاً رباتی که می‌خواهید بازخورد دهید را انتخاب کنید. 🤖
+// Handle callback queries (buttons pressed)
+function handleCallbackQuery(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const data = callbackQuery.data;
+
+  if (data === 'uploader_info') {
+    const botInfo = `
+    🔹 نام: •آ‌پــلــودر | 𝙪𝙥𝙡𝙤𝙖𝙙𝙚𝙧•
+    🔹 شناسه: @uploadd_bot
+    🔹 هدف: آپلود و مدیریت فایل به شیوه‌ای آسان و مدرن! 📂🚀
     `;
 
     const options = {
       inline_keyboard: [
-        [{ text: '🔽 ربات آپلود | uploadd_bot', callback_data: 'uploader_info' }]
+        [{ text: '📝 ارسال بازخورد', callback_data: 'send_feedback' }],
+        [{ text: '🔙 بازگشت', callback_data: 'back_to_start' }]
       ]
     };
 
-    await telegramApi.sendMessage(chatId, greetingMessage, options);
-  },
-
-  async handleFeedbackSubmission(msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-
-    // Validate feedback
-    if (!text || text.trim().length === 0) {
-      await telegramApi.sendMessage(chatId, 'لطفاً متن بازخورد را وارد کنید.');
-      return false;
-    }
-
-    // Ignore specific commands and messages
-    const ignoredMessages = [
-      '/start', 
-      'ارسال بازخورد', 
-      '/help', 
-      '/menu'
-    ];
-
-    if (ignoredMessages.includes(text.trim())) {
-      return false;
-    }
-
-    // Check if user can submit feedback
-    if (!feedbackManager.canSubmitFeedback(userId)) {
-      await telegramApi.sendMessage(chatId, '❗ شما قبلاً امروز بازخورد داده‌اید.');
-      return false;
-    }
-
-    // Store feedback
-    feedbackManager.storeFeedback(userId, text);
-
-    // Send feedback to special users
-    const username = msg.from.username || 'ناشناس';
-    const firstName = msg.from.first_name || 'کاربر';
-
-    for (const specialUserId of config.specialUsers) {
-      const feedbackMessage = `
-📝 بازخورد جدید:
-👤 کاربر: @${username}
-🏷 نام: ${firstName}
-🆔 شناسه: ${userId}
-🗨️ بازخورد: ${text}
-      `;
-
-      await telegramApi.sendMessage(specialUserId, feedbackMessage);
-    }
-
-    // Confirm to the user
-    await telegramApi.sendMessage(chatId, '✅ بازخورد شما ارسال شد. از شما متشکریم!');
-    return true;
-  },
-
-  async handleCallbackQuery(callbackQuery) {
-    const chatId = callbackQuery.message.chat.id;
-    const messageId = callbackQuery.message.message_id;
-    const data = callbackQuery.data;
-
-    try {
-      switch (data) {
-        case 'uploader_info':
-          const botInfo = `
-🔹 نام: •آ‌پــلــودر | 𝙪𝙥𝙡𝙤𝙖𝙙𝙚𝙧•
-🔹 شناسه: @uploadd_bot
-🔹 هدف: آپلود و مدیریت فایل به شیوه‌ای آسان و مدرن! 📂🚀
-          `;
-
-          const options = {
-            inline_keyboard: [
-              [{ text: '📝 ارسال بازخورد', callback_data: 'send_feedback' }],
-              [{ text: '🔙 بازگشت', callback_data: 'back_to_start' }]
-            ]
-          };
-
-          await telegramApi.editMessage(chatId, messageId, botInfo, options);
-          break;
-
-        case 'send_feedback':
-          await telegramApi.sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
-          break;
-
-        case 'back_to_start':
-          await this.handleStart(callbackQuery.message);
-          break;
-
-        default:
-          logger.info(`Unhandled callback: ${data}`);
-      }
-    } catch (error) {
-      logger.error('Callback query error', error);
-    }
+    editMessage(chatId, messageId, botInfo, options);
   }
-};
 
-// Main polling function
-async function pollMessages() {
-  try {
-    const response = await axios.post(`${config.apiBaseUrl}getUpdates`, {
-      offset: config.updateOffset,
-      timeout: 30
-    });
+  if (data === 'send_feedback') {
+    sendMessage(chatId, 'لطفاً بازخورد خود را وارد کنید: 📝');
+    pendingFeedbacks.add(callbackQuery.from.id);
+  }
 
-    const updates = response.data.result || [];
+  if (data.startsWith('forward_feedback_')) {
+    const [, userId, encodedFeedback] = data.split('_');
+    const feedback = decodeURIComponent(encodedFeedback);
     
-    if (updates.length > 0) {
-      // Update offset to get next batch of updates
-      config.updateOffset = updates[updates.length - 1].update_id + 1;
+    // Forward logic can be implemented here if needed
+    sendMessage(chatId, `بازخورد با موفقیت فوروارد شد:\n${feedback}`);
+  }
 
-      // Process each update
-      for (const update of updates) {
-        try {
-          if (update.message) {
-            const msg = update.message;
-            
-            // Handle start command
-            if (msg.text === '/start') {
-              await messageHandlers.handleStart(msg);
-              continue;
-            }
+  if (data === 'back_to_start') {
+    handleStart(callbackQuery.message);
+  }
+}
 
-            // Try to handle as feedback
-            await messageHandlers.handleFeedbackSubmission(msg);
-          }
-
-          // Handle callback queries
-          if (update.callback_query) {
-            await messageHandlers.handleCallbackQuery(update.callback_query);
-          }
-        } catch (updateError) {
-          logger.error('Error processing update', updateError);
+// Poll for new messages
+function pollMessages() {
+  axios.post(`${apiUrl}getUpdates`)
+    .then(response => {
+      const updates = response.data.result;
+      updates.forEach(update => {
+        if (update.message) {
+          handleMessage(update.message);
         }
-      }
-    }
-  } catch (error) {
-    logger.error('Error getting updates', error.response ? error.response.data : error.message);
-  }
-}
-
-// Start the bot
-function startBot() {
-  logger.info('Bot started. Listening for updates...');
-  
-  function startPolling() {
-    pollMessages().then(() => {
-      setImmediate(startPolling);
-    }).catch(error => {
-      logger.error('Polling error', error);
-      // Wait a bit before retrying
-      setTimeout(startPolling, 5000);
+        if (update.callback_query) {
+          handleCallbackQuery(update.callback_query);
+        }
+      });
+    })
+    .catch(error => {
+      console.error('Error getting updates:', error);
     });
-  }
-
-  startPolling();
 }
 
-// Initialize and start the bot
-startBot();
+// Start polling
+setInterval(pollMessages, 1000); // Poll every second
