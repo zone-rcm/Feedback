@@ -47,7 +47,7 @@ async function isUserInChannel(userId) {
 }
 
 async function sendMessage(chatId, text, options = {}) {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text,
         ...options
