@@ -1,5 +1,5 @@
 const axios = require('axios');
-const fs = require('fs').promises;
+const fs = require('fs');
 const moment = require('moment-timezone');
 
 // 🔐 Admin Usernames List
