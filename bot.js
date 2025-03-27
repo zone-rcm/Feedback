@@ -2,7 +2,7 @@ const axios = require("axios");
 
 const BOT_TOKEN = "1160037511:UNYPZY1GhLScNYpI1bLIJ77wayIqELOjtT48mbaJ";
 const CHANNEL_ID = 5272323810;
-const API_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
 
 const users = new Set(); // Stores user IDs
 const whitelist = new Set(["zonercm"]); // Whitelisted users
