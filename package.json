@@ -1,11 +1,13 @@
 {
-  "name": "telegram-bot",
+  "name": "persian-uploader-bot",
   "version": "1.0.0",
-  "main": "bot.js",
+  "description": "Persian Telegram Uploader Bot",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "axios": "1.6.2"
+    "axios": "^1.6.7",
+    "moment-timezone": "^0.5.43"
   }
 }
