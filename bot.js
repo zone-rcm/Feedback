@@ -5,7 +5,7 @@ const path = require('path');
 // Configuration
 const BOT_TOKEN = '1160037511:UNYPZY1GhLScNYpI1bLIJ77wayIqELOjtT48mbaJ';
 const CHANNEL_ID = 5272323810; // Numeric channel ID
-const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
+const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}/`;
 const WHITELIST = ['admin1', 'admin2']; // Whitelisted usernames without @
 const POLL_INTERVAL = 3000; // 3 seconds between updates
 
