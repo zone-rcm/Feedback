@@ -2,14 +2,14 @@ const axios = require("axios");
 
 const BOT_TOKEN = "1160037511:UNYPZY1GhLScNYpI1bLIJ77wayIqELOjtT48mbaJ";
 const CHANNEL_ID = 5272323810;
-const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
+const API_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 const users = new Set(); // Stores user IDs
 const whitelist = new Set(["zonercm"]); // Whitelisted users
 const files = new Map(); // Maps start codes to files
 const texts = new Map(); // Maps start codes to texts
 const pendingActions = new Map(); // Stores pending admin actions
-const lastCommands = new Map(); // Stores last user commands
+const greetedUsers = new Set(); // Prevents repeated greetings
 
 // Function to send a message
 const sendMessage = async (chatId, text, options = {}) => {
@@ -42,10 +42,14 @@ const processUpdate = async (update) => {
     const username = msg.from.username;
     const firstName = msg.from.first_name;
     const userId = msg.from.id;
+    const text = msg.text?.trim();
 
-    // Greet user with Persian time
-    const now = new Date().toLocaleString("fa-IR", { timeZone: "Asia/Tehran" });
-    sendMessage(chatId, `سلام ${firstName}!\n🕰 تاریخ و زمان ایران: ${now}`);
+    // Greet user only once
+    if (!greetedUsers.has(userId)) {
+        const now = new Date().toLocaleString("fa-IR", { timeZone: "Asia/Tehran" });
+        sendMessage(chatId, `سلام ${firstName}!\n🕰 تاریخ و زمان ایران: ${now}`);
+        greetedUsers.add(userId);
+    }
 
     // Check if user is in the channel
     if (!(await isUserInChannel(userId))) {
@@ -61,12 +65,9 @@ const processUpdate = async (update) => {
 
     users.add(userId); // Capture user ID
 
-    // Store last command if they need to re-run it after joining
-    if (msg.text) lastCommands.set(userId, msg.text);
-
     // Admin panel
-    if (msg.text === "پنل" && whitelist.has(username)) {
-        sendMessage(chatId, `🎛 پنل مدیریت\n🕰 زمان: ${now}`, {
+    if (text === "پنل" && whitelist.has(username)) {
+        sendMessage(chatId, `🎛 پنل مدیریت`, {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "📂 ارسال فایل", callback_data: "upload_file" }],
@@ -76,6 +77,7 @@ const processUpdate = async (update) => {
                 ],
             },
         });
+        return;
     }
 
     // File upload handling
@@ -84,19 +86,21 @@ const processUpdate = async (update) => {
         files.set(fileCode, msg.document.file_id);
         sendMessage(chatId, `✅ فایل دریافت شد!\n📥 لینک: /start_${fileCode}`);
         pendingActions.delete(userId);
+        return;
     }
 
     // Text upload handling
-    if (pendingActions.get(userId) === "upload_text" && msg.text) {
+    if (pendingActions.get(userId) === "upload_text" && text) {
         const textCode = Math.random().toString(36).substr(2, 6);
-        texts.set(textCode, msg.text);
+        texts.set(textCode, text);
         sendMessage(chatId, `✅ متن ذخیره شد!\n📥 لینک: /start_${textCode}`);
         pendingActions.delete(userId);
+        return;
     }
 
     // Sending stored files and texts
-    if (msg.text.startsWith("/start_")) {
-        const code = msg.text.replace("/start_", "");
+    if (text && text.startsWith("/start_")) {
+        const code = text.replace("/start_", "");
         if (files.has(code)) {
             axios.post(`${API_URL}/sendDocument`, {
                 chat_id: chatId,
@@ -105,6 +109,7 @@ const processUpdate = async (update) => {
         } else if (texts.has(code)) {
             sendMessage(chatId, texts.get(code));
         }
+        return;
     }
 };
 
@@ -120,11 +125,7 @@ const processCallbackQuery = async (callback) => {
                 chat_id: chatId,
                 message_id: callback.message.message_id,
             });
-            if (lastCommands.has(userId)) {
-                sendMessage(chatId, `✅ شما اکنون عضو شدید! درحال اجرای دستور قبلی...`);
-                processUpdate({ message: { chat: { id: chatId }, text: lastCommands.get(userId), from: { id: userId, username } } });
-                lastCommands.delete(userId);
-            }
+            sendMessage(chatId, `✅ شما اکنون عضو شدید!`);
         } else {
             sendMessage(chatId, "❌ هنوز عضو نیستید!");
         }
@@ -134,12 +135,6 @@ const processCallbackQuery = async (callback) => {
     } else if (callback.data === "upload_text" && whitelist.has(username)) {
         sendMessage(chatId, "📝 لطفاً متن خود را ارسال کنید.");
         pendingActions.set(userId, "upload_text");
-    } else if (callback.data === "broadcast" && whitelist.has(username)) {
-        sendMessage(chatId, "📢 لطفاً پیام خود را برای ارسال به کاربران وارد کنید.");
-        pendingActions.set(userId, "broadcast");
-    } else if (callback.data === "broadcast_image" && whitelist.has(username)) {
-        sendMessage(chatId, "🖼 لطفاً تصویر خود را ارسال کنید.");
-        pendingActions.set(userId, "broadcast_image");
     }
 };
 
