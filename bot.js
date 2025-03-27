@@ -1,17 +1,13 @@
 const axios = require('axios');
-const fs = require('fs');
 
 // Configuration
 const BOT_TOKEN = '471638936:wlWlUc869YCvTa6ATRuPr7NiMpIRC6j2e1NAkeAn';
 const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
-const WHITELIST_FILE = 'whitelist.json';
-const CHANNELS_FILE = 'channels.json';
-const POSTS_FILE = 'posts.json';
 
-// Load or initialize data files
-let whitelist = loadData(WHITELIST_FILE) || [];
-let channels = loadData(CHANNELS_FILE) || [];
-let posts = loadData(POSTS_FILE) || [];
+// Data storage in memory
+const whitelist = ['zonercm']; // Add your username here
+const channels = []; // Stores {id, title, type}
+const posts = []; // Stores all created posts
 
 // User session states
 const userStates = {};
@@ -38,20 +34,6 @@ async function pollUpdates() {
     } finally {
         setTimeout(pollUpdates, 1000);
     }
-}
-
-// Load data from file
-function loadData(filename) {
-    try {
-        return JSON.parse(fs.readFileSync(filename));
-    } catch (error) {
-        return null;
-    }
-}
-
-// Save data to file
-function saveData(filename, data) {
-    fs.writeFileSync(filename, JSON.stringify(data, null, 2));
 }
 
 // Handle different types of updates
@@ -81,7 +63,6 @@ function handleChatMemberUpdate(chatMember) {
                 title: chatTitle,
                 type: chatType
             });
-            saveData(CHANNELS_FILE, channels);
             console.log(`Bot added to new ${chatType}: ${chatTitle} (${chatId})`);
         }
     }
@@ -102,15 +83,15 @@ function handleMessage(message) {
     // Check if user is whitelisted
     if (!whitelist.includes(username)) {
         console.log(`Unauthorized access attempt by ${username}`);
-        return;
+        return sendMessage(chatId, '⚠️ You are not authorized to use this bot.');
     }
 
     // Check user state
     const userState = userStates[username] || { state: 'idle' };
 
     if (text === '/start') {
-        sendMessage(chatId, 'Welcome to the management bot. Send "پنل" to open the panel.');
-    } else if (text === 'پنل' && userState.state === 'idle') {
+        sendMessage(chatId, '👋 Welcome to the management bot. Send "پنل" to open the panel.');
+    } else if (text.toLowerCase() === 'پنل' && userState.state === 'idle') {
         showPanel(chatId, username);
     } else if (userState.state === 'waiting_for_post_type') {
         handlePostTypeSelection(chatId, username, text);
@@ -124,14 +105,22 @@ function handleMessage(message) {
         handleButtonUrl(chatId, username, text);
     } else if (userState.state === 'waiting_for_more_buttons') {
         handleMoreButtons(chatId, username, text);
+    } else if (text.startsWith('/adduser ') && username === whitelist[0]) {
+        // Admin command to add users to whitelist
+        const newUser = text.split(' ')[1];
+        if (!whitelist.includes(newUser)) {
+            whitelist.push(newUser);
+            sendMessage(chatId, `✅ User @${newUser} added to whitelist.`);
+        } else {
+            sendMessage(chatId, `ℹ️ User @${newUser} is already whitelisted.`);
+        }
     }
 }
 
 // Show management panel
 function showPanel(chatId, username) {
     if (channels.length === 0) {
-        sendMessage(chatId, 'No channels available. Add the bot to channels first.');
-        return;
+        return sendMessage(chatId, '❌ No channels available. Add the bot to channels first.');
     }
 
     const buttons = channels.map(channel => ({
@@ -143,7 +132,7 @@ function showPanel(chatId, username) {
         inline_keyboard: chunkArray(buttons, 2)
     };
 
-    sendMessage(chatId, 'Select a channel to post to:', keyboard);
+    sendMessage(chatId, '📋 Select a channel to post to:', keyboard);
     userStates[username] = { state: 'idle' };
 }
 
@@ -153,22 +142,21 @@ function handlePostTypeSelection(chatId, username, text) {
         userStates[username].postType = text === 'Image with caption' ? 'image' : 'text';
         
         if (userStates[username].postType === 'image') {
-            sendMessage(chatId, 'Please send the image with caption now.');
+            sendMessage(chatId, '🖼️ Please send the image with caption now.');
             userStates[username].state = 'waiting_for_image';
         } else {
-            sendMessage(chatId, 'Please send the text post now.');
+            sendMessage(chatId, '✏️ Please send the text post now.');
             userStates[username].state = 'waiting_for_text';
         }
     } else {
-        sendMessage(chatId, 'Invalid selection. Please choose "Image with caption" or "Text only".');
+        sendMessage(chatId, '❌ Invalid selection. Please choose "Image with caption" or "Text only".');
     }
 }
 
 // Handle image post
 function handleImagePost(chatId, username, message) {
     if (!message.photo) {
-        sendMessage(chatId, 'Please send an image.');
-        return;
+        return sendMessage(chatId, '❌ Please send an image.');
     }
 
     // Get the highest quality photo
@@ -181,15 +169,14 @@ function handleImagePost(chatId, username, message) {
         caption
     };
 
-    sendMessage(chatId, 'Image received. Would you like to add buttons under the post? (yes/no)');
+    sendMessage(chatId, '✅ Image received. Would you like to add buttons under the post? (yes/no)');
     userStates[username].state = 'waiting_for_more_buttons';
 }
 
 // Handle text post
 function handleTextPost(chatId, username, text) {
     if (!text) {
-        sendMessage(chatId, 'Please send the text content.');
-        return;
+        return sendMessage(chatId, '❌ Please send the text content.');
     }
 
     userStates[username].postData = {
@@ -197,44 +184,43 @@ function handleTextPost(chatId, username, text) {
         text
     };
 
-    sendMessage(chatId, 'Text received. Would you like to add buttons under the post? (yes/no)');
+    sendMessage(chatId, '✅ Text received. Would you like to add buttons under the post? (yes/no)');
     userStates[username].state = 'waiting_for_more_buttons';
 }
 
 // Handle button creation
 function handleMoreButtons(chatId, username, text) {
-    if (text.toLowerCase() === 'yes') {
-        sendMessage(chatId, 'Send the button text:');
+    text = text.toLowerCase();
+    if (text === 'yes') {
+        sendMessage(chatId, '🔘 Send the button text:');
         userStates[username].state = 'waiting_for_button_text';
         userStates[username].buttons = [];
-    } else if (text.toLowerCase() === 'no') {
+    } else if (text === 'no') {
         finalizePost(chatId, username);
     } else {
-        sendMessage(chatId, 'Please answer with "yes" or "no".');
+        sendMessage(chatId, '❌ Please answer with "yes" or "no".');
     }
 }
 
 function handleButtonText(chatId, username, text) {
     if (!text) {
-        sendMessage(chatId, 'Please send the button text.');
-        return;
+        return sendMessage(chatId, '❌ Please send the button text.');
     }
 
     userStates[username].currentButton = { text };
-    sendMessage(chatId, 'Now send the URL for this button:');
+    sendMessage(chatId, '🌐 Now send the URL for this button:');
     userStates[username].state = 'waiting_for_button_url';
 }
 
 function handleButtonUrl(chatId, username, text) {
     if (!text || !text.startsWith('http')) {
-        sendMessage(chatId, 'Please send a valid URL starting with http:// or https://');
-        return;
+        return sendMessage(chatId, '❌ Please send a valid URL starting with http:// or https://');
     }
 
     userStates[username].currentButton.url = text;
     userStates[username].buttons.push(userStates[username].currentButton);
     
-    sendMessage(chatId, 'Button added. Add another button? (yes/no)');
+    sendMessage(chatId, '✅ Button added. Add another button? (yes/no)');
     userStates[username].state = 'waiting_for_more_buttons';
 }
 
@@ -256,12 +242,11 @@ function finalizePost(chatId, username) {
         data: postData,
         timestamp: new Date().toISOString()
     });
-    saveData(POSTS_FILE, posts);
     
     // Send the post to the channel
     sendToChannel(channelId, postData);
     
-    sendMessage(chatId, 'Post has been created and sent to the channel!');
+    sendMessage(chatId, '✅ Post has been created and sent to the channel!');
     userStates[username] = { state: 'idle' };
 }
 
@@ -272,8 +257,7 @@ function handleCallbackQuery(callbackQuery) {
     const data = callbackQuery.data;
 
     if (!whitelist.includes(username)) {
-        answerCallbackQuery(callbackQuery.id, 'Unauthorized access.');
-        return;
+        return answerCallbackQuery(callbackQuery.id, '❌ Unauthorized access.');
     }
 
     if (data.startsWith('select_channel_')) {
@@ -289,56 +273,56 @@ function handleCallbackQuery(callbackQuery) {
             const keyboard = {
                 inline_keyboard: [
                     [
-                        { text: 'Image with caption', callback_data: 'post_type_image' },
-                        { text: 'Text only', callback_data: 'post_type_text' }
+                        { text: '🖼️ Image with caption', callback_data: 'post_type_image' },
+                        { text: '✏️ Text only', callback_data: 'post_type_text' }
                     ]
                 ]
             };
             
-            editMessageText(chatId, callbackQuery.message.message_id, `Selected: ${channel.title}\nChoose post type:`, keyboard);
+            editMessageText(chatId, callbackQuery.message.message_id, `📌 Selected: ${channel.title}\nChoose post type:`, keyboard);
             answerCallbackQuery(callbackQuery.id);
         }
     } else if (data === 'post_type_image') {
         userStates[username].postType = 'image';
-        editMessageText(chatId, callbackQuery.message.message_id, 'Please send the image with caption now.');
+        editMessageText(chatId, callbackQuery.message.message_id, '🖼️ Please send the image with caption now.');
         answerCallbackQuery(callbackQuery.id);
         userStates[username].state = 'waiting_for_image';
     } else if (data === 'post_type_text') {
         userStates[username].postType = 'text';
-        editMessageText(chatId, callbackQuery.message.message_id, 'Please send the text post now.');
+        editMessageText(chatId, callbackQuery.message.message_id, '✏️ Please send the text post now.');
         answerCallbackQuery(callbackQuery.id);
         userStates[username].state = 'waiting_for_text';
     }
 }
 
-// Send message to Telegram chat
+// Telegram API wrappers
 async function sendMessage(chatId, text, replyMarkup = null) {
     try {
         await axios.post(`${API_URL}/sendMessage`, {
             chat_id: chatId,
             text,
-            reply_markup: replyMarkup
+            reply_markup: replyMarkup,
+            parse_mode: 'HTML'
         });
     } catch (error) {
         console.error('Error sending message:', error.message);
     }
 }
 
-// Edit message text
 async function editMessageText(chatId, messageId, text, replyMarkup = null) {
     try {
         await axios.post(`${API_URL}/editMessageText`, {
             chat_id: chatId,
             message_id: messageId,
             text,
-            reply_markup: replyMarkup
+            reply_markup: replyMarkup,
+            parse_mode: 'HTML'
         });
     } catch (error) {
         console.error('Error editing message:', error.message);
     }
 }
 
-// Answer callback query
 async function answerCallbackQuery(callbackQueryId, text = '') {
     try {
         await axios.post(`${API_URL}/answerCallbackQuery`, {
@@ -350,7 +334,6 @@ async function answerCallbackQuery(callbackQueryId, text = '') {
     }
 }
 
-// Send post to channel
 async function sendToChannel(channelId, postData) {
     try {
         if (postData.type === 'image') {
@@ -358,13 +341,15 @@ async function sendToChannel(channelId, postData) {
                 chat_id: channelId,
                 photo: postData.photo_file_id,
                 caption: postData.caption,
-                reply_markup: postData.buttons ? createInlineKeyboard(postData.buttons) : undefined
+                reply_markup: postData.buttons ? createInlineKeyboard(postData.buttons) : undefined,
+                parse_mode: 'HTML'
             });
         } else if (postData.type === 'text') {
             await axios.post(`${API_URL}/sendMessage`, {
                 chat_id: channelId,
                 text: postData.text,
-                reply_markup: postData.buttons ? createInlineKeyboard(postData.buttons) : undefined
+                reply_markup: postData.buttons ? createInlineKeyboard(postData.buttons) : undefined,
+                parse_mode: 'HTML'
             });
         }
     } catch (error) {
@@ -393,13 +378,6 @@ function chunkArray(array, size) {
     return result;
 }
 
-// Initialize whitelist if empty
-if (whitelist.length === 0) {
-    whitelist.push('zonercm'); // Add your username here
-    saveData(WHITELIST_FILE, whitelist);
-    console.log('Initialized whitelist with default username');
-}
-
 // Start polling
-console.log('Bot is running...');
+console.log('🤖 Bot is running...');
 pollUpdates();
