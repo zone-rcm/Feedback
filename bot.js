@@ -1,207 +1,217 @@
 const axios = require('axios');
 
-// ===== CONFIGURATION ===== //
-const CONFIG = {
-    BOT_TOKEN: '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs',
-    TARGET_USERNAME: 'zonercm', // Only this user can use .raid
-    POLLING_INTERVAL: 75, // 100ms for instant responses
-    API_BASE_URL: 'https://tapi.bale.ai/bot'
+// Config
+const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
+const TARGET_USER = 'zonercm'; // Only responds to this user
+const POLL_INTERVAL = 75; // 75ms ultra-fast polling
+
+// Storage
+const activeRaids = new Map();
+const userState = new Map();
+
+// Convert Persian numbers (e.g., "۵" → 5)
+const parseNumbers = (text) => parseInt(text.toString().replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)) || 0;
+
+// Telegram API call
+const callAPI = async (method, data) => {
+    try {
+        const res = await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/${method}`, data, { timeout: 2000 });
+        return res.data;
+    } catch (err) {
+        console.error('API Error:', err.message);
+        return { ok: false };
+    }
 };
 
-// ===== GLOBALS ===== //
-let LAST_UPDATE_ID = 0;
-const activeRaids = new Map(); // Stores active raids
-const userStates = new Map(); // Tracks user input state
-
-// ===== UTILITIES ===== //
-const PERSIAN_NUMERALS = {
-    '۰': 0, '۱': 1, '۲': 2, '۳': 3, '۴': 4,
-    '۵': 5, '۶': 6, '۷': 7, '۸': 8, '۹': 9
+// Persian responses
+const PERSIAN_RESPONSES = {
+    NOT_ALLOWED: "⛔ فقط کاربر @zonercm مجاز به استفاده از این ربات است.",
+    ASK_REASON: "📝 دلیل رید را وارد کنید:",
+    ASK_LINK: "🔗 لینک را وارد کنید (مثال: @channel یا ble.ir/channel):",
+    ASK_PEOPLE: "👥 تعداد نفرات مورد نیاز را وارد کنید (مثال: ۵ یا 10):",
+    INVALID_LINK: "⚠️ لینک نامعتبر! فقط از فرمت @channel یا ble.ir/channel استفاده کنید.",
+    INVALID_NUMBER: "⚠️ عدد نامعتبر! لطفا یک عدد صحیح وارد کنید.",
+    RAID_CREATED: (link, people) => `⚡ رید ایجاد شد!\n\n🔹 لینک: ${link}\n👥 ظرفیت: 0/${people} نفر\n\n✅ برای شرکت دکمه زیر را بزنید:`,
+    JOIN_SUCCESS: (user, current, max) => `✅ کاربر ${user} ثبت نام کرد! (${current}/${max})`,
+    ALREADY_JOINED: (user) => `⚠️ کاربر ${user} قبلا در این رید ثبت نام کرده است!`,
+    RAID_FULL: (user) => `⛔ کاربر ${user} - ظرفیت رید تکمیل شده است!`,
+    PARTICIPANT_LIST: (participants) => participants.length > 0 
+        ? `🔹 شرکت کنندگان:\n${participants.map((p,i) => `${i+1}. ${p.name} (@${p.username || 'بدون یوزرنیم'})`).join('\n')}`
+        : '🔹 هنوز کسی ثبت نام نکرده است'
 };
 
-const parsePersianNumber = (text) => parseInt(
-    text.toString()
-        .split('')
-        .map(c => PERSIAN_NUMERALS[c] || c)
-        .join('')
-);
-
-const isValidLink = (link) => /^(https?:\/\/t\.me\/|@)[\w-]+$/i.test(link);
-
-// ===== TELEGRAM API WRAPPER ===== //
-const api = {
-    call: async (method, data) => {
-        try {
-            const res = await axios.post(`${CONFIG.API_BASE_URL}${CONFIG.BOT_TOKEN}/${method}`, data);
-            return res.data;
-        } catch (err) {
-            console.error(`API Error (${method}):`, err.response?.data || err.message);
-            return null;
-        }
-    },
-    sendMessage: (chatId, text, options = {}) => 
-        api.call('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', ...options }),
-    editMessageText: (chatId, messageId, text, options = {}) =>
-        api.call('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'Markdown', ...options }),
-    answerCallbackQuery: (callbackQueryId, text, showAlert = false) =>
-        api.call('answerCallbackQuery', { callback_query_id: callbackQueryId, text, show_alert: showAlert })
-};
-
-// ===== RAID MANAGEMENT ===== //
-const createRaidAnnouncement = async (chatId, raidId, reason, link, maxPeople) => {
-    const message = `
-⚔️ *رید جدید* ⚔️  
-━━━━━━━━━━━━━━  
-🔹 *دلیل:* ${reason}  
-🔹 *لینک:* ${link}  
-🔹 *ظرفیت:* 0/${maxPeople} نفر  
-━━━━━━━━━━━━━━  
-    `;
-
-    const keyboard = {
-        inline_keyboard: [[
-            { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
-        ]]
-    };
-
-    const { message_id } = (await api.sendMessage(chatId, message, { reply_markup: keyboard }))?.result || {};
-    return message_id;
-};
-
-const updateRaidMessage = async (chatId, messageId, raidId) => {
-    const raid = activeRaids.get(raidId);
-    if (!raid) return;
-
-    const participantsList = raid.participants.length > 0 
-        ? raid.participants.map((p, i) => `▫️ ${i + 1}. ${p.first_name} (@${p.username || 'ناشناس'})`).join('\n')
-        : '▫️ هنوز کسی ثبت نام نکرده است';
-
-    const updatedMessage = `
-⚔️ *رید فعال* ⚔️  
-━━━━━━━━━━━━━━  
-🔹 *دلیل:* ${raid.reason}  
-🔹 *لینک:* ${raid.link}  
-🔹 *ظرفیت:* ${raid.participants.length}/${raid.maxPeople} نفر  
-━━━━━━━━━━━━━━  
-${participantsList}
-━━━━━━━━━━━━━━  
-    `;
-
-    await api.editMessageText(chatId, messageId, updatedMessage, {
-        reply_markup: { inline_keyboard: [[
-            { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
-        ]]}
+// Handle .raid command
+const handleRaidStart = async (chatId, userId) => {
+    userState.set(userId, { step: 'reason' });
+    await callAPI('sendMessage', { 
+        chat_id: chatId, 
+        text: PERSIAN_RESPONSES.ASK_REASON 
     });
 };
 
-// ===== HANDLERS ===== //
-const handleMessage = async (message) => {
-    const { chat, from, text } = message;
-    if (!from || from.username?.toLowerCase() !== CONFIG.TARGET_USERNAME.toLowerCase()) return;
+// Process user input
+const processInput = async (msg) => {
+    const { chat, from, text } = msg;
+    const state = userState.get(from.id);
 
-    if (text?.startsWith('.raid')) {
-        userStates.set(from.id, { step: 'reason' });
-        await api.sendMessage(chat.id, "📝 *لطفا دلیل رید را وارد کنید:*");
-        return;
-    }
+    if (!state) return;
 
-    const userState = userStates.get(from.id);
-    if (!userState) return;
-
-    switch (userState.step) {
+    switch (state.step) {
         case 'reason':
-            userState.reason = text;
-            userState.step = 'link';
-            await api.sendMessage(chat.id, "🔗 *لینک چنل/گروه را وارد کنید (مثال: @channel یا t.me/channel):*");
+            state.reason = text;
+            state.step = 'link';
+            await callAPI('sendMessage', { 
+                chat_id: chat.id, 
+                text: PERSIAN_RESPONSES.ASK_LINK 
+            });
             break;
 
         case 'link':
-            if (!isValidLink(text)) {
-                await api.sendMessage(chat.id, "⚠️ *لینک نامعتبر! فقط لینک‌های @channel یا t.me/channel قابل قبول هستند.*");
+            if (!text.match(/^(https?:\/\/ble\.ir\/|@)[\w-]+$/i)) {
+                await callAPI('sendMessage', { 
+                    chat_id: chat.id, 
+                    text: PERSIAN_RESPONSES.INVALID_LINK 
+                });
                 return;
             }
-            userState.link = text;
-            userState.step = 'maxPeople';
-            await api.sendMessage(chat.id, "👥 *تعداد نفرات مورد نیاز را وارد کنید (مثال: ۵ یا 8):*");
+            state.link = text;
+            state.step = 'people';
+            await callAPI('sendMessage', { 
+                chat_id: chat.id, 
+                text: PERSIAN_RESPONSES.ASK_PEOPLE 
+            });
             break;
 
-        case 'maxPeople':
-            const maxPeople = parsePersianNumber(text);
-            if (isNaN(maxPeople) {
-                await api.sendMessage(chat.id, "⚠️ *عدد نامعتبر! لطفا یک عدد صحیح وارد کنید.*");
+        case 'people':
+            const people = parseNumbers(text);
+            if (isNaN(people)) {
+                await callAPI('sendMessage', { 
+                    chat_id: chat.id, 
+                    text: PERSIAN_RESPONSES.INVALID_NUMBER 
+                });
                 return;
             }
 
             const raidId = Date.now().toString();
             activeRaids.set(raidId, {
-                creatorId: from.id,
-                reason: userState.reason,
-                link: userState.link,
-                maxPeople,
+                link: state.link,
+                maxPeople: people,
                 participants: [],
                 messageId: null
             });
 
-            const messageId = await createRaidAnnouncement(chat.id, raidId, userState.reason, userState.link, maxPeople);
-            activeRaids.get(raidId).messageId = messageId;
-            userStates.delete(from.id);
+            const message = await callAPI('sendMessage', {
+                chat_id: chat.id,
+                text: PERSIAN_RESPONSES.RAID_CREATED(state.link, people),
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+                    ]]
+                }
+            });
+
+            if (message.ok) {
+                activeRaids.get(raidId).messageId = message.result.message_id;
+            }
+            userState.delete(from.id);
             break;
     }
 };
 
-const handleCallbackQuery = async (callbackQuery) => {
-    const { id, from, message, data } = callbackQuery;
+// Handle callback queries
+const handleCallback = async (callback) => {
+    const { data, from, message } = callback;
     const raidId = data.split('_')[1];
     const raid = activeRaids.get(raidId);
 
     if (!raid) {
-        await api.answerCallbackQuery(id, "❌ این رید دیگر فعال نیست!", true);
+        await callAPI('answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: "⚠️ این رید دیگر فعال نیست"
+        });
         return;
     }
 
+    const userTag = from.username ? `@${from.username}` : from.first_name;
+    
+    // Check if already joined
     if (raid.participants.some(p => p.id === from.id)) {
-        await api.answerCallbackQuery(id, "⚠️ شما قبلا در این رید ثبت نام کرده‌اید!", true);
+        await callAPI('answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: PERSIAN_RESPONSES.ALREADY_JOINED(userTag),
+            show_alert: true
+        });
         return;
     }
 
+    // Check if raid is full
     if (raid.participants.length >= raid.maxPeople) {
-        await api.answerCallbackQuery(id, "❌ ظرفیت این رید تکمیل شده است!", true);
+        await callAPI('answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: PERSIAN_RESPONSES.RAID_FULL(userTag),
+            show_alert: true
+        });
         return;
     }
 
+    // Add participant
     raid.participants.push({
         id: from.id,
-        first_name: from.first_name,
+        name: from.first_name,
         username: from.username
     });
 
-    await updateRaidMessage(message.chat.id, message.message_id, raidId);
-    await api.answerCallbackQuery(id, `✅ شما با موفقیت ثبت نام کردید! (${raid.participants.length}/${raid.maxPeople})`, true);
+    // Update raid message
+    await callAPI('editMessageText', {
+        chat_id: message.chat.id,
+        message_id: message.message_id,
+        text: `${PERSIAN_RESPONSES.RAID_CREATED(raid.link, raid.maxPeople)}\n\n${PERSIAN_RESPONSES.PARTICIPANT_LIST(raid.participants)}`,
+        reply_markup: {
+            inline_keyboard: [[
+                { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+            ]]
+        }
+    });
+
+    await callAPI('answerCallbackQuery', {
+        callback_query_id: callback.id,
+        text: PERSIAN_RESPONSES.JOIN_SUCCESS(userTag, raid.participants.length, raid.maxPeople),
+        show_alert: true
+    });
 };
 
-// ===== MAIN POLLING LOOP ===== //
-const pollUpdates = async () => {
+// Main polling loop
+setInterval(async () => {
     try {
-        const updates = await api.call('getUpdates', {
+        const updates = await callAPI('getUpdates', {
             offset: LAST_UPDATE_ID + 1,
             timeout: 30,
             allowed_updates: ['message', 'callback_query']
         });
 
-        if (!updates?.ok || !updates.result?.length) return;
-
-        for (const update of updates.result) {
-            LAST_UPDATE_ID = update.update_id;
-            if (update.message) await handleMessage(update.message);
-            if (update.callback_query) await handleCallbackQuery(update.callback_query);
+        if (updates.ok) {
+            for (const update of updates.result) {
+                LAST_UPDATE_ID = update.update_id;
+                
+                if (update.message) {
+                    // Verify user
+                    if (update.message.from.username?.toLowerCase() === TARGET_USER.toLowerCase() && 
+                        update.message.text?.startsWith('.raid')) {
+                        await handleRaidStart(update.message.chat.id, update.message.from.id);
+                    }
+                    // Process input
+                    else if (userState.has(update.message.from.id)) {
+                        await processInput(update.message);
+                    }
+                }
+                else if (update.callback_query) {
+                    await handleCallback(update.callback_query);
+                }
+            }
         }
     } catch (err) {
-        console.error("Polling error:", err.message);
-    } finally {
-        setTimeout(pollUpdates, CONFIG.POLLING_INTERVAL);
+        console.error('Polling error:', err.message);
     }
-};
+}, POLL_INTERVAL);
 
-// ===== START BOT ===== //
-console.log(`⚡ Raid Bot is running for @${CONFIG.TARGET_USERNAME} (${CONFIG.POLLING_INTERVAL}ms polling)`);
-pollUpdates();
+console.log("🤖 ربات رید برای @zonercm فعال شد!");
