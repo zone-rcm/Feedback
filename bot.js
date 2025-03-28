@@ -2,6 +2,7 @@ const axios = require('axios');
 
 // ===== CONFIG ===== //
 const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
+const API_URL = `https://tapi.bale.ai/bot${BOT_TOKEN}`;
 const POLLING_INTERVAL = 7;
 let LAST_UPDATE_ID = 0;
 
@@ -26,13 +27,18 @@ const RESPONSES = {
     INVALID_VOTE: "⚠️ عدد نامعتبر! لطفاً فقط عدد گزینه را ارسال کنید."
 };
 
-// ===== API HELPER ===== //
+// ===== IMPROVED API HANDLER ===== //
 const callAPI = async (method, data) => {
     try {
-        const res = await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/${method}`, data);
-        return res.data.result;
-    } catch (err) {
-        console.error(`API Error (${method}):`, err.response?.data || err.message);
+        const response = await axios({
+            method: 'post',
+            url: `${API_URL}/${method}`,
+            data: data,
+            timeout: 5000
+        });
+        return response.data.result;
+    } catch (error) {
+        console.error(`API Error (${method}):`, error.response?.data || error.message);
         return null;
     }
 };
@@ -85,22 +91,26 @@ const processMessage = async (msg) => {
                 options.map((opt, i) => `${i+1}. ${opt} (${results[opt]})`).join('\n')
             ),
             reply_markup: {
-                keyboard: [
-                    options.map((_, i) => ({ text: `${i+1}` }))
-                ],
+                keyboard: [options.map((_, i) => ({ text: `${i+1}` }))],
                 resize_keyboard: true,
                 one_time_keyboard: true
             }
         });
 
-        pollsDB.set(pollId, {
-            question: state.data.question,
-            options,
-            results,
-            chatId: chat.id,
-            messageId: message.message_id,
-            voters: new Set()
-        });
+        if (message) {
+            pollsDB.set(pollId, {
+                question: state.data.question,
+                options,
+                results,
+                chatId: chat.id,
+                messageId: message.message_id,
+                voters: new Set()
+            });
+            await callAPI('sendMessage', {
+                chat_id: chat.id,
+                text: RESPONSES.POLL_CREATED
+            });
+        }
 
         userStates.delete(from.id);
     }
@@ -114,7 +124,7 @@ const handleVote = async (msg) => {
     if (!poll) return;
 
     const optionIndex = parseInt(text) - 1;
-    if (isNaN(optionIndex) {
+    if (isNaN(optionIndex)) {
         await callAPI('sendMessage', {
             chat_id: chat.id,
             text: RESPONSES.INVALID_VOTE
@@ -153,9 +163,7 @@ const handleVote = async (msg) => {
             poll.options.map((opt, i) => `${i+1}. ${opt} (${poll.results[opt]})`).join('\n')
         ),
         reply_markup: {
-            keyboard: [
-                poll.options.map((_, i) => ({ text: `${i+1}` }))
-            ],
+            keyboard: [poll.options.map((_, i) => ({ text: `${i+1}` }))],
             resize_keyboard: true,
             one_time_keyboard: true
         }
@@ -164,11 +172,12 @@ const handleVote = async (msg) => {
     // Send confirmation
     await callAPI('sendMessage', {
         chat_id: chat.id,
-        text: RESPONSES.VOTE_RECEIVED(from.username || from.first_name, selectedOption)
+        text: RESPONSES.VOTE_RECEIVED(from.username || from.first_name, selectedOption),
+        reply_to_message_id: msg.message_id
     });
 };
 
-// ===== MAIN LOOP ===== //
+// ===== MAIN LOOP WITH PROPER ERROR HANDLING ===== //
 const pollUpdates = async () => {
     try {
         const updates = await callAPI('getUpdates', {
@@ -177,7 +186,7 @@ const pollUpdates = async () => {
             allowed_updates: ['message']
         });
 
-        if (updates) {
+        if (updates && Array.isArray(updates)) {
             for (const update of updates) {
                 LAST_UPDATE_ID = update.update_id;
 
