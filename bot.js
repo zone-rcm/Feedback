@@ -3,7 +3,7 @@ const axios = require('axios');
 // Configuration
 const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
 const TARGET_USERNAME = 'zonercm'; // Without @
-const POLLING_INTERVAL = 100; // ms for near-instant responses
+const POLLING_INTERVAL = 300; // ms for near-instant responses
 let LAST_UPDATE_ID = 0;
 
 // Enhanced Persian responses database
@@ -60,7 +60,7 @@ async function getUpdates() {
 // Function to reply to message
 async function replyToMessage(chatId, messageId, text) {
     try {
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage`, {
             chat_id: chatId,
             text: text,
             reply_to_message_id: messageId,  // This makes it a reply
