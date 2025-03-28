@@ -1,287 +1,207 @@
 const axios = require('axios');
 
-// Configuration
-const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
-const TARGET_USERNAME = 'zonercm'; // Without @
-const POLLING_INTERVAL = 150; // 250ms polling for instant responses
-let LAST_UPDATE_ID = 0;
-
-// Scheduled messages storage
-const scheduledMessages = new Map();
-const userStates = new Map();
-
-// Persian texts
-const TEXTS = {
-    WELCOME: "⏰ <b>ربات برنامه‌ریزی پیام</b>\n\nلطفا مدت زمان تاخیر را انتخاب کنید:",
-    CONFIRMATION: "✅ پیام شما برای ارسال در <b>%s</b> تنظیم شد.",
-    INVALID_INPUT: "⚠️ لطفا یک عدد معتبر وارد کنید.",
-    TIME_PROMPT: "⌛ لطفا تعداد دقیقه را وارد کنید:",
-    CANCELLED: "❌ برنامه‌ریزی پیام لغو شد.",
-    NO_MESSAGE: "⚠️ لطفا این دستور را در پاسخ به پیامی که می‌خواهید برنامه‌ریزی کنید ارسال کنید."
+// ===== CONFIGURATION ===== //
+const CONFIG = {
+    BOT_TOKEN: '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs',
+    TARGET_USERNAME: 'zonercm', // Only this user can use .raid
+    POLLING_INTERVAL: 75, // 100ms for instant responses
+    API_BASE_URL: 'https://tapi.bale.ai/bot'
 };
 
-// Time options for inline keyboard
-const TIME_OPTIONS = [
-    { text: "5 دقیقه", callback_data: "schedule_5" },
-    { text: "15 دقیقه", callback_data: "schedule_15" },
-    { text: "30 دقیقه", callback_data: "schedule_30" },
-    { text: "1 ساعت", callback_data: "schedule_60" },
-    { text: "2 ساعت", callback_data: "schedule_120" },
-    { text: "زمان دلخواه", callback_data: "schedule_custom" },
-    { text: "لغو", callback_data: "schedule_cancel" }
-];
+// ===== GLOBALS ===== //
+let LAST_UPDATE_ID = 0;
+const activeRaids = new Map(); // Stores active raids
+const userStates = new Map(); // Tracks user input state
 
-// Function to get updates
-async function getUpdates() {
-    try {
-        const response = await axios.get(`https://tapi.bale.ai/bot${BOT_TOKEN}/getUpdates`, {
-            params: {
-                offset: LAST_UPDATE_ID + 1,
-                timeout: 30,
-                allowed_updates: ['message', 'callback_query']
-            }
-        });
-        return response.data.result || [];
-    } catch (error) {
-        console.error('Error getting updates:', error.message);
-        return [];
-    }
-}
+// ===== UTILITIES ===== //
+const PERSIAN_NUMERALS = {
+    '۰': 0, '۱': 1, '۲': 2, '۳': 3, '۴': 4,
+    '۵': 5, '۶': 6, '۷': 7, '۸': 8, '۹': 9
+};
 
-// Function to send message
-async function sendMessage(chatId, text, options = {}) {
-    try {
-        await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage`, {
-            chat_id: chatId,
-            text: text,
-            parse_mode: 'HTML',
-            ...options
-        });
-    } catch (error) {
-        console.error('Error sending message:', error.message);
-    }
-}
+const parsePersianNumber = (text) => parseInt(
+    text.toString()
+        .split('')
+        .map(c => PERSIAN_NUMERALS[c] || c)
+        .join('')
+);
 
-// Function to reply to message
-async function replyToMessage(chatId, messageId, text, options = {}) {
-    try {
-        await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage`, {
-            chat_id: chatId,
-            text: text,
-            reply_to_message_id: messageId,
-            parse_mode: 'HTML',
-            ...options
-        });
-    } catch (error) {
-        console.error('Error replying to message:', error.message);
-    }
-}
+const isValidLink = (link) => /^(https?:\/\/t\.me\/|@)[\w-]+$/i.test(link);
 
-// Function to answer callback query
-async function answerCallbackQuery(callbackQueryId, text) {
-    try {
-        await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/answerCallbackQuery`, {
-            callback_query_id: callbackQueryId,
-            text: text || " ",
-            show_alert: !!text
-        });
-    } catch (error) {
-        console.error('Error answering callback:', error.message);
-    }
-}
+// ===== TELEGRAM API WRAPPER ===== //
+const api = {
+    call: async (method, data) => {
+        try {
+            const res = await axios.post(`${CONFIG.API_BASE_URL}${CONFIG.BOT_TOKEN}/${method}`, data);
+            return res.data;
+        } catch (err) {
+            console.error(`API Error (${method}):`, err.response?.data || err.message);
+            return null;
+        }
+    },
+    sendMessage: (chatId, text, options = {}) => 
+        api.call('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', ...options }),
+    editMessageText: (chatId, messageId, text, options = {}) =>
+        api.call('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'Markdown', ...options }),
+    answerCallbackQuery: (callbackQueryId, text, showAlert = false) =>
+        api.call('answerCallbackQuery', { callback_query_id: callbackQueryId, text, show_alert: showAlert })
+};
 
-// Function to edit message reply markup
-async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
-    try {
-        await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/editMessageReplyMarkup`, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: replyMarkup
-        });
-    } catch (error) {
-        console.error('Error editing message markup:', error.message);
-    }
-}
+// ===== RAID MANAGEMENT ===== //
+const createRaidAnnouncement = async (chatId, raidId, reason, link, maxPeople) => {
+    const message = `
+⚔️ *رید جدید* ⚔️  
+━━━━━━━━━━━━━━  
+🔹 *دلیل:* ${reason}  
+🔹 *لینک:* ${link}  
+🔹 *ظرفیت:* 0/${maxPeople} نفر  
+━━━━━━━━━━━━━━  
+    `;
 
-// Function to show schedule menu with inline keyboard
-async function showScheduleMenu(chatId, messageId) {
     const keyboard = {
-        inline_keyboard: [
-            TIME_OPTIONS.slice(0, 3),
-            TIME_OPTIONS.slice(3, 6),
-            [TIME_OPTIONS[6]]
-        ]
+        inline_keyboard: [[
+            { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+        ]]
     };
 
-    await replyToMessage(chatId, messageId, TEXTS.WELCOME, {
-        reply_markup: keyboard
+    const { message_id } = (await api.sendMessage(chatId, message, { reply_markup: keyboard }))?.result || {};
+    return message_id;
+};
+
+const updateRaidMessage = async (chatId, messageId, raidId) => {
+    const raid = activeRaids.get(raidId);
+    if (!raid) return;
+
+    const participantsList = raid.participants.length > 0 
+        ? raid.participants.map((p, i) => `▫️ ${i + 1}. ${p.first_name} (@${p.username || 'ناشناس'})`).join('\n')
+        : '▫️ هنوز کسی ثبت نام نکرده است';
+
+    const updatedMessage = `
+⚔️ *رید فعال* ⚔️  
+━━━━━━━━━━━━━━  
+🔹 *دلیل:* ${raid.reason}  
+🔹 *لینک:* ${raid.link}  
+🔹 *ظرفیت:* ${raid.participants.length}/${raid.maxPeople} نفر  
+━━━━━━━━━━━━━━  
+${participantsList}
+━━━━━━━━━━━━━━  
+    `;
+
+    await api.editMessageText(chatId, messageId, updatedMessage, {
+        reply_markup: { inline_keyboard: [[
+            { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+        ]]}
     });
-}
+};
 
-// Function to schedule a message
-function scheduleMessage(chatId, messageText, delayMinutes) {
-    const delayMs = delayMinutes * 60 * 1000;
-    const scheduledTime = new Date(Date.now() + delayMs);
-    
-    const timer = setTimeout(async () => {
-        await sendMessage(chatId, `⏰ پیام زمان‌دار:\n${messageText}`);
-        scheduledMessages.delete(chatId);
-    }, delayMs);
-    
-    scheduledMessages.set(chatId, {
-        timer,
-        scheduledTime
-    });
-    
-    return scheduledTime;
-}
+// ===== HANDLERS ===== //
+const handleMessage = async (message) => {
+    const { chat, from, text } = message;
+    if (!from || from.username?.toLowerCase() !== CONFIG.TARGET_USERNAME.toLowerCase()) return;
 
-// Function to handle schedule command
-async function handleScheduleCommand(chatId, messageId, userId, originalMessageId) {
-    // Store user state
-    userStates.set(userId, {
-        chatId,
-        originalMessageId,
-        waitingForCustomTime: false
-    });
-
-    await showScheduleMenu(chatId, messageId);
-}
-
-// Function to handle callback queries
-async function handleCallbackQuery(callbackQuery, userId) {
-    const data = callbackQuery.data;
-    const message = callbackQuery.message;
-    const chatId = message.chat.id;
-    const messageId = message.message_id;
-
-    // Only allow the target user to interact
-    if (callbackQuery.from.username.toLowerCase() !== TARGET_USERNAME.toLowerCase()) {
-        await answerCallbackQuery(callbackQuery.id, "❌ فقط کاربر @zonercm می‌تواند از این گزینه استفاده کند.");
+    if (text?.startsWith('.raid')) {
+        userStates.set(from.id, { step: 'reason' });
+        await api.sendMessage(chat.id, "📝 *لطفا دلیل رید را وارد کنید:*");
         return;
     }
 
-    if (data.startsWith('schedule_')) {
-        const timeOption = data.split('_')[1];
-        const userState = userStates.get(userId);
+    const userState = userStates.get(from.id);
+    if (!userState) return;
 
-        if (!userState) {
-            await answerCallbackQuery(callbackQuery.id, "⚠️ وضعیت کاربر یافت نشد.");
-            return;
-        }
+    switch (userState.step) {
+        case 'reason':
+            userState.reason = text;
+            userState.step = 'link';
+            await api.sendMessage(chat.id, "🔗 *لینک چنل/گروه را وارد کنید (مثال: @channel یا t.me/channel):*");
+            break;
 
-        if (timeOption === 'cancel') {
-            if (scheduledMessages.has(chatId)) {
-                clearTimeout(scheduledMessages.get(chatId).timer);
-                scheduledMessages.delete(chatId);
+        case 'link':
+            if (!isValidLink(text)) {
+                await api.sendMessage(chat.id, "⚠️ *لینک نامعتبر! فقط لینک‌های @channel یا t.me/channel قابل قبول هستند.*");
+                return;
             }
-            await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
-            await sendMessage(chatId, TEXTS.CANCELLED);
-            await answerCallbackQuery(callbackQuery.id);
-            return;
-        }
+            userState.link = text;
+            userState.step = 'maxPeople';
+            await api.sendMessage(chat.id, "👥 *تعداد نفرات مورد نیاز را وارد کنید (مثال: ۵ یا 8):*");
+            break;
 
-        if (timeOption === 'custom') {
-            userState.waitingForCustomTime = true;
-            userStates.set(userId, userState);
-            await sendMessage(chatId, TEXTS.TIME_PROMPT);
-            await answerCallbackQuery(callbackQuery.id);
-            return;
-        }
+        case 'maxPeople':
+            const maxPeople = parsePersianNumber(text);
+            if (isNaN(maxPeople) {
+                await api.sendMessage(chat.id, "⚠️ *عدد نامعتبر! لطفا یک عدد صحیح وارد کنید.*");
+                return;
+            }
 
-        const delayMinutes = parseInt(timeOption);
-        if (isNaN(delayMinutes)) {
-            await answerCallbackQuery(callbackQuery.id, TEXTS.INVALID_INPUT);
-            return;
-        }
+            const raidId = Date.now().toString();
+            activeRaids.set(raidId, {
+                creatorId: from.id,
+                reason: userState.reason,
+                link: userState.link,
+                maxPeople,
+                participants: [],
+                messageId: null
+            });
 
-        // Get the original message to schedule
-        const updates = await getUpdates();
-        const originalMessage = updates.find(u => u.message?.message_id === userState.originalMessageId)?.message;
-
-        if (originalMessage) {
-            const scheduledTime = scheduleMessage(chatId, originalMessage.text, delayMinutes);
-            const timeText = formatTime(delayMinutes);
-            await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
-            await sendMessage(chatId, TEXTS.CONFIRMATION.replace('%s', timeText));
-            await answerCallbackQuery(callbackQuery.id);
-        } else {
-            await answerCallbackQuery(callbackQuery.id, TEXTS.NO_MESSAGE);
-        }
+            const messageId = await createRaidAnnouncement(chat.id, raidId, userState.reason, userState.link, maxPeople);
+            activeRaids.get(raidId).messageId = messageId;
+            userStates.delete(from.id);
+            break;
     }
-}
+};
 
-// Helper function to format time
-function formatTime(minutes) {
-    if (minutes < 60) return `${minutes} دقیقه دیگر`;
-    if (minutes === 60) return "1 ساعت دیگر";
-    return `${Math.floor(minutes/60)} ساعت و ${minutes%60} دقیقه دیگر`;
-}
+const handleCallbackQuery = async (callbackQuery) => {
+    const { id, from, message, data } = callbackQuery;
+    const raidId = data.split('_')[1];
+    const raid = activeRaids.get(raidId);
 
-// Main polling loop
-async function poll() {
+    if (!raid) {
+        await api.answerCallbackQuery(id, "❌ این رید دیگر فعال نیست!", true);
+        return;
+    }
+
+    if (raid.participants.some(p => p.id === from.id)) {
+        await api.answerCallbackQuery(id, "⚠️ شما قبلا در این رید ثبت نام کرده‌اید!", true);
+        return;
+    }
+
+    if (raid.participants.length >= raid.maxPeople) {
+        await api.answerCallbackQuery(id, "❌ ظرفیت این رید تکمیل شده است!", true);
+        return;
+    }
+
+    raid.participants.push({
+        id: from.id,
+        first_name: from.first_name,
+        username: from.username
+    });
+
+    await updateRaidMessage(message.chat.id, message.message_id, raidId);
+    await api.answerCallbackQuery(id, `✅ شما با موفقیت ثبت نام کردید! (${raid.participants.length}/${raid.maxPeople})`, true);
+};
+
+// ===== MAIN POLLING LOOP ===== //
+const pollUpdates = async () => {
     try {
-        const updates = await getUpdates();
-        
-        for (const update of updates) {
-            LAST_UPDATE_ID = update.update_id;
-            
-            // Handle messages
-            if (update.message && update.message.text) {
-                const message = update.message;
-                const username = message.from?.username;
-                const userId = message.from?.id;
-                
-                // Only respond to the target username
-                if (username && username.toLowerCase() === TARGET_USERNAME.toLowerCase()) {
-                    const text = message.text.trim();
-                    
-                    if (text.startsWith('.schedule')) {
-                        const originalMessageId = message.reply_to_message?.message_id;
-                        if (originalMessageId) {
-                            await handleScheduleCommand(message.chat.id, message.message_id, userId, originalMessageId);
-                        } else {
-                            await replyToMessage(message.chat.id, message.message_id, TEXTS.NO_MESSAGE);
-                        }
-                    }
-                    else if (userStates.get(userId)?.waitingForCustomTime) {
-                        // Handle custom time input
-                        const delayMinutes = parseInt(text);
-                        if (!isNaN(delayMinutes) && delayMinutes > 0) {
-                            const userState = userStates.get(userId);
-                            const updates = await getUpdates();
-                            const originalMessage = updates.find(u => u.message?.message_id === userState.originalMessageId)?.message;
-                            
-                            if (originalMessage) {
-                                const scheduledTime = scheduleMessage(message.chat.id, originalMessage.text, delayMinutes);
-                                const timeText = formatTime(delayMinutes);
-                                await sendMessage(message.chat.id, TEXTS.CONFIRMATION.replace('%s', timeText));
-                            } else {
-                                await sendMessage(message.chat.id, TEXTS.NO_MESSAGE);
-                            }
-                        } else {
-                            await sendMessage(message.chat.id, TEXTS.INVALID_INPUT);
-                        }
-                        userStates.delete(userId);
-                    }
-                }
-            }
-            
-            // Handle callback queries
-            if (update.callback_query) {
-                const callbackQuery = update.callback_query;
-                const userId = callbackQuery.from.id;
-                await handleCallbackQuery(callbackQuery, userId);
-            }
-        }
-    } catch (error) {
-        console.error('Polling error:', error.message);
-    } finally {
-        // Continue polling with 250ms interval
-        setTimeout(poll, POLLING_INTERVAL);
-    }
-}
+        const updates = await api.call('getUpdates', {
+            offset: LAST_UPDATE_ID + 1,
+            timeout: 30,
+            allowed_updates: ['message', 'callback_query']
+        });
 
-// Start the bot
-console.log('⏰ Exclusive scheduler bot is running for @' + TARGET_USERNAME);
-poll();
+        if (!updates?.ok || !updates.result?.length) return;
+
+        for (const update of updates.result) {
+            LAST_UPDATE_ID = update.update_id;
+            if (update.message) await handleMessage(update.message);
+            if (update.callback_query) await handleCallbackQuery(update.callback_query);
+        }
+    } catch (err) {
+        console.error("Polling error:", err.message);
+    } finally {
+        setTimeout(pollUpdates, CONFIG.POLLING_INTERVAL);
+    }
+};
+
+// ===== START BOT ===== //
+console.log(`⚡ Raid Bot is running for @${CONFIG.TARGET_USERNAME} (${CONFIG.POLLING_INTERVAL}ms polling)`);
+pollUpdates();
