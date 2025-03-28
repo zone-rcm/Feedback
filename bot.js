@@ -4,7 +4,8 @@ const axios = require('axios');
 const CONFIG = {
     BOT_TOKEN: '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs',
     TARGET_USERNAME: 'zonercm',
-    POLLING_INTERVAL: 75 // 75ms polling
+    POLLING_INTERVAL: 75,
+    API_BASE_URL: 'https://tapi.bale.ai/bot'
 };
 
 // ===== ذخیره‌سازی ===== //
@@ -13,68 +14,90 @@ const activeRaids = new Map();
 const userStates = new Map();
 
 // ===== ابزارهای کمکی ===== //
-const parsePersianNumber = text => parseInt(text.toString().replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+const parsePersianNumber = text => {
+    const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+    return parseInt(text.toString().replace(/[۰-۹]/g, d => persianDigits.indexOf(d)));
+};
 
 // ===== پاسخ‌های فارسی ===== //
 const RESPONSES = {
     NOT_ALLOWED: "⛔ فقط @zonercm می‌تواند از این ربات استفاده کند.",
-    ASK_REASON: "📝 دلیل رید را وارد کنید:",
-    ASK_LINK: "🔗 لینک را وارد کنید (مثال: @channel یا ble.ir/channel):",
-    ASK_PEOPLE: "👥 تعداد نفرات مورد نیاز را وارد کنید (مثال: ۵ یا 10):",
-    INVALID_LINK: "⚠️ لینک نامعتبر! فقط از فرمت @channel یا ble.ir/channel استفاده کنید.",
-    INVALID_NUMBER: "⚠️ عدد نامعتبر! لطفا یک عدد صحیح وارد کنید.",
-    RAID_CREATED: (link, max) => `⚡ رید ایجاد شد!\n\n🔹 لینک: ${link}\n👥 ظرفیت: 0/${max} نفر`,
-    JOIN_SUCCESS: (user, current, max) => `✅ ${user} ثبت نام کرد! (${current}/${max})`,
-    ALREADY_JOINED: user => `⚠️ ${user} قبلاً ثبت نام کرده!`,
-    RAID_FULL: user => `⛔ ${user} - ظرفیت تکمیل شد!`
+    ASK_LINK: "🌐 لینک مقصد را وارد کنید:\n(مثال: @channel یا ble.ir/channel)",
+    ASK_PEOPLE: "👥 تعداد نفرات مورد نیاز را وارد کنید:",
+    INVALID_LINK: "⚠️ لینک نامعتبر!\nفقط از فرمت @channel یا ble.ir/channel استفاده کنید.",
+    INVALID_NUMBER: "⚠️ تعداد نامعتبر!\nلطفا یک عدد صحیح وارد کنید.",
+    RAID_CREATED: (link, max) => 
+        `⚡ *رید جدید ایجاد شد!*\n\n` +
+        `🔗 *لینک:* ${link}\n` +
+        `👥 *ظرفیت:* ${max} نفر\n\n` +
+        `👇 برای شرکت کلیک کنید:`,
+    JOIN_SUCCESS: (user, current, max) => 
+        `✅ ${user} به رید پیوست!\n` +
+        `🔹 ${current}/${max} نفر ثبت‌نام کرده‌اند`,
+    ALREADY_JOINED: user => `⚠️ ${user} قبلاً در این رید ثبت‌نام کرده است!`,
+    RAID_FULL: user => `⛔ ${user} - ظرفیت رید تکمیل شده است!`,
+    PARTICIPANTS: participants => 
+        participants.length > 0 
+            ? `🔹 *شرکت‌کنندگان:*\n${participants.map((p,i) => `▫️ ${i+1}. ${p.name} (${p.username ? '@'+p.username : 'بدون یوزرنیم'})`).join('\n')}`
+            : '▫️ هنوز کسی ثبت‌نام نکرده است'
 };
 
 // ===== توابع API ===== //
+const callAPI = async (method, data) => {
+    try {
+        const response = await axios.post(`${CONFIG.API_BASE_URL}${CONFIG.BOT_TOKEN}/${method}`, data, {
+            timeout: 2000,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        return response.data;
+    } catch (error) {
+        console.error(`API Error (${method}):`, error.message);
+        return { ok: false };
+    }
+};
+
 const sendMessage = async (chatId, text, options = {}) => {
-    return axios.post(`https://tapi.bale.ai/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+    return callAPI('sendMessage', {
         chat_id: chatId,
         text,
-        parse_mode: 'HTML',
+        parse_mode: 'Markdown',
         ...options
     });
 };
 
 const editMessageText = async (chatId, messageId, text, markup) => {
-    return axios.post(`https://tapi.bale.ai/bot${CONFIG.BOT_TOKEN}/editMessageText`, {
+    return callAPI('editMessageText', {
         chat_id: chatId,
         message_id: messageId,
         text,
-        reply_markup: markup,
-        parse_mode: 'HTML'
+        parse_mode: 'Markdown',
+        reply_markup: markup
     });
 };
 
 const answerCallback = async (callbackId, text, alert = false) => {
-    return axios.post(`https://tapi.bale.ai/bot${CONFIG.BOT_TOKEN}/answerCallbackQuery`, {
+    return callAPI('answerCallbackQuery', {
         callback_query_id: callbackId,
         text,
         show_alert: alert
     });
 };
 
-// ===== پردازش رید ===== //
-const createRaid = async (chatId, userId) => {
-    userStates.set(userId, { step: 'reason' });
-    await sendMessage(chatId, RESPONSES.ASK_REASON);
+// ===== مدیریت رید ===== //
+const startRaidCreation = async (chatId, userId) => {
+    userStates.set(userId, { step: 'link' });
+    await sendMessage(chatId, RESPONSES.ASK_LINK);
 };
 
-const processInput = async (msg) => {
+const processRaidInput = async (msg) => {
     const { chat, from, text } = msg;
     const state = userStates.get(from.id);
 
     if (!state) return;
 
-    if (state.step === 'reason') {
-        state.reason = text;
-        state.step = 'link';
-        await sendMessage(chat.id, RESPONSES.ASK_LINK);
-    } 
-    else if (state.step === 'link') {
+    if (state.step === 'link') {
         if (!text.match(/^(https?:\/\/ble\.ir\/|@)[\w-]+$/i)) {
             await sendMessage(chat.id, RESPONSES.INVALID_LINK);
             return;
@@ -82,26 +105,30 @@ const processInput = async (msg) => {
         state.link = text;
         state.step = 'people';
         await sendMessage(chat.id, RESPONSES.ASK_PEOPLE);
-    }
+    } 
     else if (state.step === 'people') {
         const people = parsePersianNumber(text);
-        if (isNaN(people)) {
+        if (isNaN(people) {
             await sendMessage(chat.id, RESPONSES.INVALID_NUMBER);
             return;
         }
 
-        const raidId = Date.now().toString();
+        const raidId = `raid_${Date.now()}`;
         const keyboard = {
-            inline_keyboard: [[{ text: "✅ شرکت در رید", callback_data: `join_${raidId}` }]]
+            inline_keyboard: [[
+                { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+            ]]
         };
 
-        const { data } = await sendMessage(chat.id, RESPONSES.RAID_CREATED(state.link, people), {
-            reply_markup: keyboard
-        });
+        const { result } = await sendMessage(
+            chat.id,
+            RESPONSES.RAID_CREATED(state.link, people),
+            { reply_markup: keyboard }
+        );
 
         activeRaids.set(raidId, {
             chatId: chat.id,
-            messageId: data.result.message_id,
+            messageId: result.message_id,
             link: state.link,
             maxPeople: people,
             participants: []
@@ -112,14 +139,14 @@ const processInput = async (msg) => {
 };
 
 // ===== مدیریت شرکت‌کنندگان ===== //
-const handleJoin = async (callback) => {
-    const raidId = callback.data.split('_')[1];
+const handleParticipation = async (callback) => {
+    const [_, raidId] = callback.data.split('_');
     const raid = activeRaids.get(raidId);
     const user = callback.from;
     const userTag = user.username ? `@${user.username}` : user.first_name;
 
     if (!raid) {
-        await answerCallback(callback.id, "⚠️ این رید منقضی شده است", true);
+        await answerCallback(callback.id, "⚠️ این رید دیگر فعال نیست", true);
         return;
     }
 
@@ -135,7 +162,7 @@ const handleJoin = async (callback) => {
         return;
     }
 
-    // افزودن کاربر
+    // افزودن شرکت‌کننده
     raid.participants.push({
         id: user.id,
         name: user.first_name,
@@ -146,44 +173,54 @@ const handleJoin = async (callback) => {
     await editMessageText(
         raid.chatId,
         raid.messageId,
-        `${RESPONSES.RAID_CREATED(raid.link, raid.maxPeople)}\n\n🔹 شرکت‌کنندگان: ${raid.participants.length}/${raid.maxPeople}`,
-        { inline_keyboard: [[{ text: "✅ شرکت در رید", callback_data: `join_${raidId}` }]] }
+        `${RESPONSES.RAID_CREATED(raid.link, raid.maxPeople)}\n\n${RESPONSES.PARTICIPANTS(raid.participants)}`,
+        {
+            inline_keyboard: [[
+                { text: "✅ شرکت در رید", callback_data: `join_${raidId}` }
+            ]]
+        }
     );
 
-    await answerCallback(callback.id, RESPONSES.JOIN_SUCCESS(userTag, raid.participants.length, raid.maxPeople), true);
+    await answerCallback(
+        callback.id,
+        RESPONSES.JOIN_SUCCESS(userTag, raid.participants.length, raid.maxPeople),
+        true
+    );
 };
 
 // ===== حلقه اصلی ===== //
-const pollUpdates = async () => {
+const pollForUpdates = async () => {
     try {
-        const { data } = await axios.post(`https://tapi.bale.ai/bot${CONFIG.BOT_TOKEN}/getUpdates`, {
+        const { result } = await callAPI('getUpdates', {
             offset: LAST_UPDATE_ID + 1,
-            timeout: 30
+            timeout: 30,
+            allowed_updates: ['message', 'callback_query']
         });
 
-        if (data.ok) {
-            for (const update of data.result) {
+        if (result) {
+            for (const update of result) {
                 LAST_UPDATE_ID = update.update_id;
-                
+
                 if (update.message) {
                     if (update.message.text?.startsWith('.raid') && 
                         update.message.from.username === CONFIG.TARGET_USERNAME) {
-                        await createRaid(update.message.chat.id, update.message.from.id);
+                        await startRaidCreation(update.message.chat.id, update.message.from.id);
                     } else if (userStates.has(update.message.from.id)) {
-                        await processInput(update.message);
+                        await processRaidInput(update.message);
                     }
                 } 
                 else if (update.callback_query) {
-                    await handleJoin(update.callback_query);
+                    await handleParticipation(update.callback_query);
                 }
             }
         }
     } catch (err) {
         console.error('خطا در دریافت آپدیت:', err.message);
     } finally {
-        setTimeout(pollUpdates, CONFIG.POLLING_INTERVAL);
+        setTimeout(pollForUpdates, CONFIG.POLLING_INTERVAL);
     }
 };
 
+// ===== شروع ربات ===== //
 console.log("🤖 ربات رید برای @zonercm فعال شد!");
-pollUpdates();
+pollForUpdates();
