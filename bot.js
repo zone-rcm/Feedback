@@ -156,7 +156,7 @@ const handleJoin = async (callback) => {
 // ===== حلقه اصلی ===== //
 const pollUpdates = async () => {
     try {
-        const { data } = await axios.post(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/getUpdates`, {
+        const { data } = await axios.post(`https://tapi.bale.ai/bot${CONFIG.BOT_TOKEN}/getUpdates`, {
             offset: LAST_UPDATE_ID + 1,
             timeout: 30
         });
