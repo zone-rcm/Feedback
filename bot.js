@@ -4,7 +4,7 @@ const axios = require('axios');
 const CONFIG = {
     BOT_TOKEN: '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs',
     TARGET_USERNAME: 'zonercm',
-    POLLING_INTERVAL: 75,
+    POLLING_INTERVAL: 25,
     API_BASE_URL: 'https://tapi.bale.ai/bot'
 };
 
