@@ -2,7 +2,7 @@ const axios = require('axios');
 
 // ===== CONFIG ===== //
 const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
-const POLLING_INTERVAL = 1;
+const POLLING_INTERVAL = 7;
 let LAST_UPDATE_ID = 0;
 
 // ===== STORAGE ===== //
