@@ -3,7 +3,7 @@ const axios = require('axios');
 // Configuration
 const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
 const TARGET_USERNAME = 'zonercm'; // Without @
-const POLLING_INTERVAL = 300; // ms for near-instant responses
+const POLLING_INTERVAL = 100; // ms for near-instant responses
 let LAST_UPDATE_ID = 0;
 
 // Enhanced Persian responses database
