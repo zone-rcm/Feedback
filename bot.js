@@ -3,41 +3,27 @@ const axios = require('axios');
 // Configuration
 const BOT_TOKEN = '2124491577:SmMBycCEHXV5JzwfS8tKmM71Kmi4zlpcA8IxdFCs';
 const TARGET_USERNAME = 'zonercm'; // Without @
-const POLLING_INTERVAL = 100; // ms for near-instant responses
+const POLLING_INTERVAL = 250; // Faster 250ms polling
 let LAST_UPDATE_ID = 0;
 
-// Enhanced Persian responses database
-const PERSIAN_RESPONSES = {
-    // Greetings
-    "سلام": ["سلام به شما 👋", "سلام دوست عزیز 🌹", "درود بر شما ✨"],
-    "درود": ["درود بر شما 🙏", "سلامتی 😊", "درود فراوان 🌺"],
-    "صبح بخیر": ["صبح شما هم بخیر ☀️", "صبح زیبایی داشته باشید 🌄", "صبح بخیر نوروزی 🌷"],
-    
-    // Common phrases
-    "حالت چطوره؟": ["خوبم ممنون 😊", "عالی هستم 👍", "به لطف شما خوبم 🌟"],
-    "خوبی؟": ["ممنون تو خوبی؟ 💖", "بله خدا رو شکر 🙌", "مرسی تو چطوری؟ 😄"],
-    "مرسی": ["خواهش میکنم 🤗", "قابلی نداشت 💐", "خوشحالم که تونستم کمک کنم 🌈"],
-    
-    // Questions
-    "چطوری؟": ["خوبم ممنون 😇", "همه چی رو راهه 🚀", "بهتر از این نمیشه 🎉"],
-    "چه خبر؟": ["سلامتی 🙏", "همه چی آرومه 🕊️", "خبر خاصی نیست 🤷‍♂️"],
-    
-    // Farewells
-    "خداحافظ": ["بدرود 👋", "موفق باشید 🍀", "به سلامت 💙"],
-    "بای": ["خداحافظ ✌️", "تا بعد 🌙", "موفق باشی 🎯"],
-    
-    // Basic words
-    "بله": ["آره 👍", "حتما 💯", "موافقم ✅"],
-    "نه": ["نخیر 👎", "منفی ❌", "متاسفانه نه 😔"],
-    "ممنون": ["خواهش میکنم 🤲", "قابلی نداشت 🌸", "خوشحالم کمک کردم 😊"],
-    "لطفا": ["حتما 🙏", "با کمال میل 🌷", "چشم 👀"],
-    
-    // Time-related
-    "ساعت چنده؟": ["متاسفانه ساعت ندارم ⏰", "لطفا از ساعت خودتون ببینید ⌚", "نمیدونم دقیقا 🤔"],
-    "امروز چندمه؟": ["امروز روز خوبیه 📅", "تاریخ رو از تقویم ببینید 🗓️", "نمیدونم دقیقا 🤷‍♀️"],
-    
-    // Default responses
-    "_default": ["متوجه نشدم 🤔", "لطفا واضح تر بگویید ❓", "میشه تکرار کنید؟ 🔄"]
+// Scheduled messages storage
+const scheduledMessages = new Map();
+
+// Persian menu texts
+const MENU_TEXTS = {
+    WELCOME: "⏰ ربات برنامه‌ریزی پیام\n\nلطفا مدت زمان تاخیر را انتخاب کنید:",
+    OPTIONS: [
+        "1. 5 دقیقه دیگر",
+        "2. 15 دقیقه دیگر",
+        "3. 30 دقیقه دیگر",
+        "4. 1 ساعت دیگر",
+        "5. 2 ساعت دیگر",
+        "6. زمان دلخواه (به دقیقه)"
+    ],
+    CONFIRMATION: "✅ پیام شما برای ارسال در %s تنظیم شد.",
+    INVALID_INPUT: "⚠️ لطفا یک عدد معتبر وارد کنید.",
+    TIME_PROMPT: "لطفا تعداد دقیقه را وارد کنید:",
+    CANCELLED: "❌ برنامه‌ریزی پیام لغو شد."
 };
 
 // Function to get updates
@@ -57,49 +43,130 @@ async function getUpdates() {
     }
 }
 
-// Function to reply to message
-async function replyToMessage(chatId, messageId, text) {
+// Function to send message
+async function sendMessage(chatId, text, options = {}) {
     try {
         await axios.post(`https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage`, {
             chat_id: chatId,
             text: text,
-            reply_to_message_id: messageId,  // This makes it a reply
-            parse_mode: 'HTML'
+            parse_mode: 'HTML',
+            ...options
+        });
+    } catch (error) {
+        console.error('Error sending message:', error.message);
+    }
+}
+
+// Function to reply to message
+async function replyToMessage(chatId, messageId, text, options = {}) {
+    try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: text,
+            reply_to_message_id: messageId,
+            parse_mode: 'HTML',
+            ...options
         });
     } catch (error) {
         console.error('Error replying to message:', error.message);
     }
 }
 
-// Enhanced response generator
-function generateResponse(messageText) {
-    messageText = messageText.trim().toLowerCase();
-    
-    // Remove Persian/Arabic characters that might cause issues
-    const cleanedText = messageText.replace(/[َُِّٰٖٓ]/g, '');
-    
-    // Check for exact matches first
-    if (PERSIAN_RESPONSES[cleanedText]) {
-        const options = PERSIAN_RESPONSES[cleanedText];
-        return options[Math.floor(Math.random() * options.length)];
-    }
-    
-    // Check for partial matches with priority to longer phrases
-    const matchingPhrases = Object.entries(PERSIAN_RESPONSES)
-        .filter(([key]) => cleanedText.includes(key.toLowerCase()))
-        .sort((a, b) => b[0].length - a[0].length); // Sort by length descending
-    
-    if (matchingPhrases.length > 0) {
-        const responses = matchingPhrases[0][1];
-        return responses[Math.floor(Math.random() * responses.length)];
-    }
-    
-    // Default response
-    const defaultResponses = PERSIAN_RESPONSES['_default'];
-    return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
+// Function to show schedule menu
+async function showScheduleMenu(chatId, messageId) {
+    const keyboard = {
+        reply_markup: {
+            keyboard: MENU_TEXTS.OPTIONS.map(option => [option]),
+            resize_keyboard: true,
+            one_time_keyboard: true
+        }
+    };
+    await replyToMessage(chatId, messageId, MENU_TEXTS.WELCOME, keyboard);
 }
 
-// Main polling loop with improved error handling
+// Function to schedule a message
+function scheduleMessage(chatId, messageText, delayMinutes) {
+    const delayMs = delayMinutes * 60 * 1000;
+    const scheduledTime = new Date(Date.now() + delayMs);
+    
+    const timer = setTimeout(async () => {
+        await sendMessage(chatId, `⏰ پیام زمان‌دار:\n${messageText}`);
+        scheduledMessages.delete(chatId);
+    }, delayMs);
+    
+    scheduledMessages.set(chatId, {
+        timer,
+        scheduledTime
+    });
+    
+    return scheduledTime;
+}
+
+// Function to cancel scheduled message
+function cancelScheduledMessage(chatId) {
+    if (scheduledMessages.has(chatId)) {
+        clearTimeout(scheduledMessages.get(chatId).timer);
+        scheduledMessages.delete(chatId);
+        return true;
+    }
+    return false;
+}
+
+// Function to handle schedule command
+async function handleScheduleCommand(chatId, messageId, text) {
+    const parts = text.split('\n');
+    
+    if (parts.length === 1) {
+        // First step: Show menu
+        await showScheduleMenu(chatId, messageId);
+    } else {
+        // Second step: Process time selection
+        const timeInput = parts[1].trim();
+        
+        // Handle menu options
+        let delayMinutes;
+        if (timeInput.startsWith('1')) delayMinutes = 5;
+        else if (timeInput.startsWith('2')) delayMinutes = 15;
+        else if (timeInput.startsWith('3')) delayMinutes = 30;
+        else if (timeInput.startsWith('4')) delayMinutes = 60;
+        else if (timeInput.startsWith('5')) delayMinutes = 120;
+        else if (timeInput.startsWith('6')) {
+            await replyToMessage(chatId, messageId, MENU_TEXTS.TIME_PROMPT);
+            return;
+        } else if (/^\d+$/.test(timeInput)) {
+            // Custom time entered
+            delayMinutes = parseInt(timeInput);
+        } else {
+            await replyToMessage(chatId, messageId, MENU_TEXTS.INVALID_INPUT);
+            return;
+        }
+        
+        // Get the message to schedule (original message)
+        const updates = await getUpdates();
+        const originalMessage = updates.find(u => u.message?.message_id === messageId)?.message;
+        
+        if (originalMessage && originalMessage.reply_to_message) {
+            const messageToSchedule = originalMessage.reply_to_message.text;
+            const scheduledTime = scheduleMessage(chatId, messageToSchedule, delayMinutes);
+            
+            const timeText = formatTime(delayMinutes);
+            await replyToMessage(chatId, messageId, 
+                MENU_TEXTS.CONFIRMATION.replace('%s', timeText));
+        } else {
+            await replyToMessage(chatId, messageId, 
+                "⚠️ لطفا این دستور را در پاسخ به پیامی که می‌خواهید برنامه‌ریزی کنید ارسال کنید.");
+        }
+    }
+}
+
+// Helper function to format time
+function formatTime(minutes) {
+    if (minutes < 60) return `${minutes} دقیقه دیگر`;
+    if (minutes === 60) return "1 ساعت دیگر";
+    return `${Math.floor(minutes/60)} ساعت و ${minutes%60} دقیقه دیگر`;
+}
+
+// Main polling loop
 async function poll() {
     try {
         const updates = await getUpdates();
@@ -113,19 +180,27 @@ async function poll() {
                 
                 // Only respond to the target username
                 if (username && username.toLowerCase() === TARGET_USERNAME.toLowerCase()) {
-                    const responseText = generateResponse(message.text);
-                    await replyToMessage(message.chat.id, message.message_id, responseText);
+                    const text = message.text.trim();
+                    
+                    if (text.startsWith('.schedule')) {
+                        await handleScheduleCommand(message.chat.id, message.message_id, text);
+                    }
+                    else if (text === 'لغو' || text === 'cancel') {
+                        if (cancelScheduledMessage(message.chat.id)) {
+                            await replyToMessage(message.chat.id, message.message_id, MENU_TEXTS.CANCELLED);
+                        }
+                    }
                 }
             }
         }
     } catch (error) {
         console.error('Polling error:', error.message);
     } finally {
-        // Continue polling with setImmediate for faster response
-        setImmediate(poll);
+        // Continue polling with 250ms interval
+        setTimeout(poll, POLLING_INTERVAL);
     }
 }
 
 // Start the bot
-console.log('🚀 Bot is running and ready to respond to @' + TARGET_USERNAME);
+console.log('⏰ Scheduler bot is running for @' + TARGET_USERNAME);
 poll();
